@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { PluginOptions } from "@opencode-ai/plugin"
 import type { Message, Part, TextPart } from "@opencode-ai/sdk/v2"
-import type { TuiPlugin, TuiPluginModule, TuiRouteCurrent, TuiSidebarFileItem, TuiSidebarTodoItem } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiRouteCurrent, TuiSidebarFileItem, TuiSidebarTodoItem } from "@opencode-ai/plugin/tui"
 
 const MAX_RECENT_MESSAGES = 6
 const MAX_CHANGED_FILES = 30
@@ -282,7 +282,7 @@ function openEnhanceDialog(
   ))
 }
 
-const tui: TuiPlugin = async (api, options) => {
+export const tui: TuiPlugin = async (api, options) => {
   const state: PluginState = { enhancing: false }
 
   const unregister = api.command.register(() => [
@@ -309,9 +309,4 @@ const tui: TuiPlugin = async (api, options) => {
   })
 }
 
-const plugin: TuiPluginModule & { id: string } = {
-  id: "prompt-enhancer",
-  tui,
-}
 
-export default plugin
