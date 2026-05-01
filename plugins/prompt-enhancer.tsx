@@ -342,7 +342,11 @@ function openEnhanceDialog(
             if (signal.aborted) return
 
             if (originalPrompt) {
-              await restorePrompt(api, state, originalPrompt, signal)
+              try {
+                await restorePrompt(api, state, originalPrompt, signal)
+              } catch {
+                // Best-effort restore; do not suppress the error toast.
+              }
             }
 
             const message = error instanceof Error ? error.message : "Model enhancement failed."
