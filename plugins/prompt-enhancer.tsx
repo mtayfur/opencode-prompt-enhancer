@@ -1,7 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 import type { PluginOptions } from "@opencode-ai/plugin"
 import type { Message, Part, TextPart } from "@opencode-ai/sdk/v2"
-import type { TuiPlugin, TuiPluginModule, TuiRouteCurrent, TuiSidebarFileItem, TuiSidebarTodoItem } from "@opencode-ai/plugin/tui"
+import type {
+  TuiPlugin,
+  TuiPluginModule,
+  TuiPromptInfo,
+  TuiPromptRef,
+  TuiRouteCurrent,
+  TuiSidebarFileItem,
+  TuiSidebarTodoItem,
+  TuiSlotPlugin,
+} from "@opencode-ai/plugin/tui"
 
 const MAX_RECENT_MESSAGES = 6
 const MAX_CHANGED_FILES = 30
@@ -10,6 +19,10 @@ const MAX_TODOS = 10
 const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
 const TEMP_SESSION_TITLE = "Prompt Enhancer"
+const HOME_PROMPT_PLACEHOLDERS = {
+  normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
+  shell: ["ls -la", "git status", "pwd"],
+}
 
 const ENHANCER_SYSTEM_PROMPT = `You rewrite rough user drafts into strong prompts for OpenCode, an AI coding assistant.
 
@@ -51,6 +64,7 @@ type ModelRef = {
 type Api = Parameters<TuiPlugin>[0]
 type PluginState = {
   enhancing: boolean
+  promptRef?: TuiPromptRef
 }
 
 function parseModelString(value: string | undefined): ModelRef | undefined {
@@ -102,6 +116,58 @@ function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): Mod
   if (override) return override
 
   return parseModelString(api.state.config.small_model || api.state.config.model)
+}
+
+function clonePromptInfo(prompt: TuiPromptInfo): TuiPromptInfo {
+  return {
+    input: prompt.input,
+    mode: prompt.mode,
+    parts: prompt.parts.map((part) => ({ ...part })),
+  }
+}
+
+function nextPromptInfo(prompt: TuiPromptInfo, input: string): TuiPromptInfo {
+  return {
+    input,
+    mode: prompt.mode,
+    parts: prompt.parts.filter((part) => part.type !== "text").map((part) => ({ ...part })),
+  }
+}
+
+function currentPromptText(state: PluginState): string {
+  return state.promptRef?.current.input ?? ""
+}
+
+function bindPromptRef(state: PluginState, forwarded: ((ref: TuiPromptRef | undefined) => void) | undefined, ref: TuiPromptRef | undefined): void {
+  state.promptRef = ref
+  forwarded?.(ref)
+}
+
+async function writePrompt(api: Api, state: PluginState, input: string, signal: AbortSignal, template?: TuiPromptInfo): Promise<void> {
+  const promptRef = state.promptRef
+  if (promptRef) {
+    promptRef.set(nextPromptInfo(template ?? promptRef.current, input))
+    promptRef.focus()
+    return
+  }
+
+  const directory = api.state.path.directory
+  const requestOptions = { signal, throwOnError: true } as const
+  await api.client.tui.clearPrompt({ directory }, requestOptions)
+  if (input) {
+    await api.client.tui.appendPrompt({ directory, text: input }, requestOptions)
+  }
+}
+
+async function restorePrompt(api: Api, state: PluginState, prompt: TuiPromptInfo, signal: AbortSignal): Promise<void> {
+  const promptRef = state.promptRef
+  if (promptRef) {
+    promptRef.set(clonePromptInfo(prompt))
+    promptRef.focus()
+    return
+  }
+
+  await writePrompt(api, state, prompt.input, signal, prompt)
 }
 
 function gatherContext(api: Api): string {
@@ -231,10 +297,13 @@ function openEnhanceDialog(
 
   if (signal.aborted) return
 
+  const initialValue = currentPromptText(state)
+
   api.ui.dialog.replace(() => (
     <api.ui.DialogPrompt
       title={DIALOG_TITLE}
       placeholder="Describe what you want to do..."
+      value={initialValue}
       onCancel={() => api.ui.dialog.clear()}
       onConfirm={(value) => {
         const input = value.trim()
@@ -244,7 +313,11 @@ function openEnhanceDialog(
           return
         }
 
+        const originalPrompt = state.promptRef ? clonePromptInfo(state.promptRef.current) : undefined
         state.enhancing = true
+        if (originalPrompt) {
+          state.promptRef?.set(nextPromptInfo(originalPrompt, ""))
+        }
         api.ui.dialog.clear()
         api.ui.toast({
           variant: "info",
@@ -258,10 +331,7 @@ function openEnhanceDialog(
             const enhanced = await enhanceWithModel(api, options, input, signal)
             if (signal.aborted) return
 
-            const directory = api.state.path.directory
-            const requestOptions = { signal, throwOnError: true } as const
-            await api.client.tui.clearPrompt({ directory }, requestOptions)
-            await api.client.tui.appendPrompt({ directory, text: enhanced }, requestOptions)
+            await writePrompt(api, state, enhanced, signal, originalPrompt)
             api.ui.toast({
               variant: "success",
               title: "Prompt enhanced",
@@ -270,6 +340,10 @@ function openEnhanceDialog(
             })
           } catch (error) {
             if (signal.aborted) return
+
+            if (originalPrompt) {
+              await restorePrompt(api, state, originalPrompt, signal)
+            }
 
             const message = error instanceof Error ? error.message : "Model enhancement failed."
             api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
@@ -285,11 +359,40 @@ function openEnhanceDialog(
 const tui: TuiPlugin = async (api, options) => {
   const state: PluginState = { enhancing: false }
 
+  const promptSlots: TuiSlotPlugin = {
+    slots: {
+      home_prompt(_ctx, props) {
+        return (
+          <api.ui.Prompt
+            ref={(ref) => bindPromptRef(state, props.ref, ref)}
+            workspaceID={props.workspace_id}
+            right={<api.ui.Slot name="home_prompt_right" workspace_id={props.workspace_id} />}
+            placeholders={HOME_PROMPT_PLACEHOLDERS}
+          />
+        )
+      },
+      session_prompt(_ctx, props) {
+        return (
+          <api.ui.Prompt
+            ref={(ref) => bindPromptRef(state, props.ref, ref)}
+            sessionID={props.session_id}
+            visible={props.visible}
+            disabled={props.disabled}
+            onSubmit={props.on_submit}
+            right={<api.ui.Slot name="session_prompt_right" session_id={props.session_id} />}
+          />
+        )
+      },
+    },
+  }
+
+  api.slots.register(promptSlots)
+
   const unregister = api.command.register(() => [
     {
       title: DIALOG_TITLE,
       value: "prompt-enhancer.enhance",
-      description: "Rewrite a draft prompt with project context (Ctrl+E)",
+      description: "Enhance prompt with project context (Ctrl+E)",
       category: "Prompt",
       keybind: "ctrl+e",
       suggested: true,
@@ -315,4 +418,3 @@ const plugin: TuiPluginModule & { id: string } = {
 }
 
 export default plugin
-
