@@ -1,1 +1,1 @@
-export { tui } from "./plugins/prompt-enhancer"
+export { default } from "./plugins/prompt-enhancer"
