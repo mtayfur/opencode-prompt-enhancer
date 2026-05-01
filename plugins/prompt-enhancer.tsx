@@ -104,9 +104,6 @@ function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): Mod
   return parseModelString(api.state.config.small_model || api.state.config.model)
 }
 
-// INTENT: Collect workspace context to help the enhancer model produce
-// more specific, grounded prompts. Keeps it lightweight — paths and
-// summaries only, no file contents.
 function gatherContext(api: Api): string {
   const sections: string[] = []
 
@@ -221,10 +218,6 @@ async function enhanceWithModel(
   }
 }
 
-// INTENT: Dialog-based UX avoids overriding prompt slots with <api.ui.Prompt>,
-// which triggers a Bun 1.3.11 segfault on Ctrl+C exit during Solid unmount.
-// The SDK has no API to read the current prompt text without slot overrides,
-// so we ask the user to enter their draft in a dialog instead.
 function openEnhanceDialog(
   api: Api,
   options: PluginOptions | undefined,
