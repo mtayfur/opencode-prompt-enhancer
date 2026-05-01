@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["index.ts", "plugins/**/*.ts", "plugins/**/*.tsx"]
+}

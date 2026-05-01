@@ -1,0 +1,30 @@
+{
+  "name": "opencode-prompt-enhancer",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that rewrites rough drafts into stronger prompts.",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": "./index.ts",
+  "scripts": {
+    "typecheck": "bunx tsc -p tsconfig.json"
+  },
+  "files": [
+    "README.md",
+    "index.ts",
+    "plugins"
+  ],
+  "dependencies": {
+    "@opencode-ai/plugin": "1.14.20",
+    "@opentui/solid": "0.2.1",
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "typescript": "5.8.2"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "prompt",
+    "tui"
+  ]
+}
