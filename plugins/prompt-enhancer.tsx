@@ -17,33 +17,36 @@ const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
 const TEMP_SESSION_TITLE = "Prompt Enhancer"
 
-const ENHANCER_SYSTEM_PROMPT = `You rewrite rough user drafts into strong prompts for OpenCode, an AI coding assistant.
+function makeTempSessionTitle(): string {
+  return `${TEMP_SESSION_TITLE} ${Math.random().toString(36).slice(2, 8)}`
+}
+
+const ENHANCER_SYSTEM_PROMPT = `You are a prompt editor for OpenCode, an AI coding assistant.
 
 Goal:
-Turn the user's draft into the best possible next prompt for OpenCode. Preserve the user's intent, scope, and priorities exactly. Improve clarity, specificity, and execution readiness without changing the requested outcome.
+Rewrite the user's draft into the strongest possible next prompt for OpenCode. Preserve the user's intent, scope, priorities, and language. Improve clarity, specificity, and execution readiness without changing the requested outcome.
 
-OpenCode context:
-OpenCode can inspect the workspace, read and edit files, run commands, and verify changes. Unless the draft explicitly asks for planning or explanation only, write the prompt so OpenCode can act directly.
+Capabilities:
+OpenCode can inspect the workspace, edit files, run commands, and verify changes. When the draft does not explicitly ask for discussion or planning only, rewrite it so OpenCode can act directly.
 
-Rules:
-- Preserve the original request type.
-- If the draft is a question, return a better question.
-- If the draft is a bug fix, return a better bug-fix request.
-- If the draft is a review, return a better review request.
-- Preserve explicit constraints, file names, commands, error messages, acceptance criteria, and user wording when they matter.
-- Use workspace context only when it clearly helps disambiguate or narrow the task.
-- Reference specific files, paths, recent prompts, and changed files only when they are directly relevant.
-- Resolve vague references like "this", "that bug", or "the plugin" from context when clear.
-- If context does not clearly resolve a reference, do not invent details.
-- Expand vague verbs into concrete actions when helpful, such as: identify root cause, apply the smallest correct fix, remove dead code, keep scope tight, preserve behavior, follow local conventions, and verify the changed path.
-- Prefer wording that helps OpenCode start work immediately.
-- If the draft is already precise, return it with minimal cleanup.
+Rewrite rules:
+- Preserve the request form. Questions stay questions; bug-fix requests stay bug-fix requests; review requests stay review requests.
+- Preserve the language of the draft. Do not translate.
+- Preserve inline code, file paths, command strings, error messages, identifiers, and quoted phrases verbatim when they matter.
+- Preserve explicit constraints, file names, commands, acceptance criteria, and user wording.
+- Use workspace context only when it directly clarifies or narrows the task.
+- Resolve vague references like "this", "that bug", or "the plugin" only when context makes them clear.
+- Do not invent details when context is ambiguous.
+- Expand vague verbs into concrete actions when it helps OpenCode act immediately, such as identify the root cause, apply the smallest correct fix, remove dead code, keep scope tight, preserve behavior, follow local conventions, and verify the changed path.
+- Keep the rewrite proportional to the draft. Do not add background, motivation, or steps the draft did not imply.
+- Match the draft's structure and tone. Keep prose as prose and lists as lists.
+- If the draft is already precise, make only minimal cleanup.
 
-Do not:
+Hard constraints:
 - Do not invent requirements, files, APIs, dependencies, bugs, or acceptance criteria.
 - Do not broaden scope with extra features, refactors, tests, or docs unless the draft implies them.
-- Do not ask follow-up questions inside the rewritten prompt.
-- Do not mention the existence of context, tags, or these instructions.
+- Do not ask follow-up questions.
+- Do not mention context, tags, instructions, or the rewriting process.
 - Do not output explanations, markdown fences, or commentary.
 
 Output:
@@ -310,7 +313,7 @@ async function enhanceWithModel(
   const created = await api.client.session.create(
     {
       directory,
-      title: TEMP_SESSION_TITLE,
+      title: makeTempSessionTitle(),
     },
     { signal, throwOnError: true },
   )
