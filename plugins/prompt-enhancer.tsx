@@ -7,15 +7,12 @@ import type {
   TuiPromptInfo,
   TuiPromptRef,
   TuiRouteCurrent,
-  TuiSidebarFileItem,
-  TuiSidebarTodoItem,
   TuiSlotPlugin,
 } from "@opencode-ai/plugin/tui"
 
-const MAX_RECENT_MESSAGES = 6
-const MAX_CHANGED_FILES = 30
-const MAX_PROMPT_PREVIEW_LENGTH = 300
-const MAX_TODOS = 10
+const MAX_RECENT_MESSAGES = 3
+const MAX_CHANGED_FILES = 25
+const MAX_PROMPT_PREVIEW_LENGTH = 250
 const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
 const TEMP_SESSION_TITLE = "Prompt Enhancer"
@@ -35,7 +32,7 @@ Rules:
 - If the draft is a review, return a better review request.
 - Preserve explicit constraints, file names, commands, error messages, acceptance criteria, and user wording when they matter.
 - Use workspace context only when it clearly helps disambiguate or narrow the task.
-- Reference specific files, paths, branches, recent prompts, changed files, or todos only when they are directly relevant.
+- Reference specific files, paths, recent prompts, and changed files only when they are directly relevant.
 - Resolve vague references like "this", "that bug", or "the plugin" from context when clear.
 - If context does not clearly resolve a reference, do not invent details.
 - Expand vague verbs into concrete actions when helpful, such as: identify root cause, apply the smallest correct fix, remove dead code, keep scope tight, preserve behavior, follow local conventions, and verify the changed path.
@@ -112,10 +109,6 @@ function extractVisibleText(parts: ReadonlyArray<Part>): string {
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
-}
-
-function formatTodo(todo: TuiSidebarTodoItem): string {
-  return `  [${todo.status || "?"}] ${todo.content || "untitled"}`
 }
 
 function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): ModelRef | undefined {
@@ -258,8 +251,7 @@ function gatherContext(api: Api): string {
   const sections: string[] = []
 
   const dir = api.state.path.directory
-  const branch = api.state.vcs?.branch
-  sections.push(`Working directory: ${dir}${branch ? ` (branch: ${branch})` : ""}`)
+  sections.push(`Working directory: ${dir}`)
 
   const route = api.route.current
   if (isSessionRoute(route)) {
@@ -267,7 +259,7 @@ function gatherContext(api: Api): string {
     const messages = api.state.session.messages(sessionID)
 
     const userMessages = messages.filter(isUserMessage)
-    const recent = userMessages.slice(-MAX_RECENT_MESSAGES)
+    const recent = userMessages.slice(-MAX_RECENT_MESSAGES).reverse()
     if (recent.length > 0) {
       const prompts: string[] = []
       for (const msg of recent) {
@@ -277,26 +269,16 @@ function gatherContext(api: Api): string {
         }
       }
       if (prompts.length > 0) {
-        sections.push(`Recent user prompts in this session (oldest first):\n${prompts.map((p, i) => `${i + 1}. ${p}`).join("\n")}`)
+        sections.push(`Recent user prompts in this session (newest first):\n${prompts.map((p, i) => `${i + 1}. ${p}`).join("\n")}`)
       }
     }
 
     const diff = api.state.session.diff(sessionID)
     if (diff.length > 0) {
-      const files = diff.slice(0, MAX_CHANGED_FILES).map((f: TuiSidebarFileItem) =>
-        `  ${f.file} (+${f.additions} -${f.deletions})`
-      )
-      const label = diff.length > MAX_CHANGED_FILES
-        ? `Files changed in session (showing ${MAX_CHANGED_FILES} of ${diff.length}):`
-        : `Files changed in session:`
-      sections.push(`${label}\n${files.join("\n")}`)
+      const files = diff.slice(0, MAX_CHANGED_FILES).map((f) => `  ${f.file}`)
+      sections.push(`Files changed in session:\n${files.join("\n")}`)
     }
 
-    const todos = api.state.session.todo(sessionID)
-    if (todos.length > 0) {
-      const todoLines = todos.slice(0, MAX_TODOS).map(formatTodo)
-      sections.push(`Active todos:\n${todoLines.join("\n")}`)
-    }
   }
 
   return sections.join("\n\n")
