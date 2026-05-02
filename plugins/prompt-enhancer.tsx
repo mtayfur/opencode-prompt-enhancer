@@ -19,10 +19,6 @@ const MAX_TODOS = 10
 const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
 const TEMP_SESSION_TITLE = "Prompt Enhancer"
-const HOME_PROMPT_PLACEHOLDERS = {
-  normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
-  shell: ["ls -la", "git status", "pwd"],
-}
 
 const ENHANCER_SYSTEM_PROMPT = `You rewrite rough user drafts into strong prompts for OpenCode, an AI coding assistant.
 
@@ -338,7 +334,7 @@ async function enhanceWithModel(
   )
 
   const tempSessionID = created.data?.id
-  if (!tempSessionID) throw new Error("Prompt enhancer session creation failed.")
+  if (!tempSessionID) throw new Error("Failed to start prompt enhancer.")
 
   try {
     const response = await api.client.session.prompt(
@@ -358,10 +354,10 @@ async function enhanceWithModel(
     )
 
     const parts = response.data?.parts
-    if (!parts) throw new Error("Enhancer model returned no response.")
+    if (!parts) throw new Error("Enhancer returned no response.")
 
     const enhanced = extractVisibleText(parts)
-    if (!enhanced) throw new Error("Enhancer model returned no text.")
+    if (!enhanced) throw new Error("Enhancer returned no text.")
     return enhanced
   } finally {
     try {
@@ -379,7 +375,7 @@ function openEnhanceDialog(
   signal: AbortSignal,
 ): void {
   if (state.enhancing) {
-    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enhancement already in progress." })
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enhancement in progress." })
     return
   }
 
@@ -387,7 +383,7 @@ function openEnhanceDialog(
 
   const target = currentPromptTarget(api, state)
   if (!target) {
-    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt enhancement is only available from a prompt view." })
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enhancement only works from a prompt." })
     return
   }
 
@@ -402,19 +398,19 @@ function openEnhanceDialog(
   api.ui.dialog.replace(() => (
     <api.ui.DialogPrompt
       title={DIALOG_TITLE}
-      placeholder="Describe what you want to do..."
+      placeholder="Describe the task..."
       value={initialValue}
       onCancel={() => api.ui.dialog.clear()}
       onConfirm={(value) => {
         const input = value.trim()
         if (!input) {
-          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt is empty." })
+          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter a prompt first." })
           api.ui.dialog.clear()
           return
         }
 
         if (!isPromptHandleActive(api, state, handle)) {
-          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while the dialog was open." })
+          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while dialog was open." })
           api.ui.dialog.clear()
           return
         }
@@ -448,7 +444,7 @@ function openEnhanceDialog(
               api.ui.toast({
                 variant: "warning",
                 title: TOAST_TITLE,
-                message: "Enhanced prompt is ready, but the original prompt is no longer active.",
+                message: "Enhanced prompt is ready, but that prompt is no longer active.",
               })
               return
             }
@@ -456,7 +452,7 @@ function openEnhanceDialog(
             api.ui.toast({
               variant: "success",
               title: "Prompt enhanced",
-              message: "Enhanced prompt written to input.",
+              message: "Enhanced prompt added to input.",
               duration: 3000,
             })
           } catch (error) {
@@ -478,10 +474,10 @@ function openEnhanceDialog(
               }
             }
 
-            const baseMessage = error instanceof Error ? error.message : "Model enhancement failed."
+            const baseMessage = error instanceof Error ? error.message : "Prompt enhancement failed."
             const message = restored
               ? baseMessage
-              : `${baseMessage} Original prompt could not be restored because the active prompt changed.`
+              : `${baseMessage} Original prompt could not be restored because the prompt changed.`
             api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
           } finally {
             state.enhancing = false
@@ -503,7 +499,6 @@ const tui: TuiPlugin = async (api, options) => {
             ref={(ref) => bindPromptRef(state, { name: "home", workspaceID: props.workspace_id }, props.ref, ref)}
             workspaceID={props.workspace_id}
             right={<api.ui.Slot name="home_prompt_right" workspace_id={props.workspace_id} />}
-            placeholders={HOME_PROMPT_PLACEHOLDERS}
           />
         )
       },
@@ -528,7 +523,7 @@ const tui: TuiPlugin = async (api, options) => {
     {
       title: DIALOG_TITLE,
       value: "prompt-enhancer.enhance",
-      description: "Enhance prompt with project context (Ctrl+E)",
+      description: "Enhance current prompt (Ctrl+E)",
       category: "Prompt",
       keybind: "ctrl+e",
       suggested: true,
