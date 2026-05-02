@@ -1,11 +1,20 @@
 # opencode-prompt-enhancer
 
-OpenCode TUI plugin that rewrites rough prompt drafts into stronger prompts with workspace context.
+OpenCode TUI plugin that rewrites rough prompt drafts into clearer, stronger prompts.
 
-## Package
+## What it does
 
-- npm: `opencode-prompt-enhancer`
-- GitHub: `mtayfur/opencode-prompt-enhancer`
+- Rewrites rough prompt drafts into clearer, stronger prompts.
+- Uses lightweight workspace context.
+- Keeps the original intent and language, and does not read file contents.
+
+## Context used
+
+The enhancer uses:
+
+- the current working directory
+- recent user prompts in the current session
+- files changed in the current session
 
 ## Install
 
@@ -14,20 +23,20 @@ Add the package to OpenCode's `tui.json` plugin list:
 ```jsonc
 {
   "plugin": [
-    "opencode-prompt-enhancer@latest"
+    "@mtayfur/opencode-prompt-enhancer@latest"
   ]
 }
 ```
 
+OpenCode `>=1.3.14` is required.
+
 ## Use
 
-After restarting OpenCode, press `Ctrl+E` or run `/enhance`.
-
-The plugin opens a dialog, rewrites your draft with workspace context, and writes the enhanced prompt back into the current input.
-
-## Context
-
-The enhancer uses the current working directory, branch, recent user prompts, changed files, and active todos. It passes lightweight context only and does not read file contents.
+1. Open OpenCode in a workspace.
+2. Enter a rough prompt in the TUI prompt.
+3. Press `Ctrl+E` or run `/enhance`.
+4. Review the prefilled dialog, edit it if needed, and confirm.
+5. The enhanced prompt replaces the current input.
 
 ## Development
 

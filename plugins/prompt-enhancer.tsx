@@ -16,11 +16,6 @@ const MAX_CHANGED_FILES = 25
 const MAX_PROMPT_PREVIEW_LENGTH = 250
 const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
-const TEMP_SESSION_TITLE = "Prompt Enhancer"
-
-function makeTempSessionTitle(): string {
-  return `${TEMP_SESSION_TITLE} ${Math.random().toString(36).slice(2, 8)}`
-}
 
 type ModelRef = {
   providerID: string
@@ -55,37 +50,20 @@ function parseModelString(value: string | undefined): ModelRef | undefined {
   }
 }
 
-function getModelOverride(options: PluginOptions | undefined): ModelRef | undefined {
-  const value = typeof options?.model === "string" ? options.model : undefined
-  return parseModelString(value)
-}
-
 function isSessionRoute(route: TuiRouteCurrent): route is Extract<TuiRouteCurrent, { name: "session" }> {
   return route.name === "session"
 }
 
-function isUserMessage(message: Message): message is Extract<Message, { role: "user" }> {
-  return message.role === "user"
-}
-
-function isVisibleTextPart(part: Part): part is TextPart {
-  return part.type === "text" && !part.ignored
-}
-
 function extractVisibleText(parts: ReadonlyArray<Part>): string {
   return parts
-    .filter(isVisibleTextPart)
+    .filter((part): part is TextPart => part.type === "text" && !part.ignored)
     .map((part) => part.text)
     .join("")
     .trim()
 }
 
-function truncate(value: string, maxLength: number): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
-}
-
 function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): ModelRef | undefined {
-  const override = getModelOverride(options)
+  const override = typeof options?.model === "string" ? parseModelString(options.model) : undefined
   if (override) return override
 
   return parseModelString(api.state.config.small_model || api.state.config.model)
@@ -118,25 +96,14 @@ function samePromptTarget(left: PromptTarget | undefined, right: PromptTarget | 
   return false
 }
 
-function resolvePromptTarget(route: TuiRouteCurrent, workspaceID?: string): PromptTarget | undefined {
-  if (route.name === "home") return { name: "home", workspaceID }
-  if (isSessionRoute(route)) {
-    return { name: "session", sessionID: route.params.sessionID }
-  }
-  return undefined
-}
-
-function isPromptTargetActive(route: TuiRouteCurrent, target: PromptTarget): boolean {
-  if (target.name === "home") return route.name === "home"
-  return isSessionRoute(route) && route.params.sessionID === target.sessionID
-}
-
-function currentPromptTarget(api: Api, state: PluginState): PromptTarget | undefined {
-  return state.promptTarget ?? resolvePromptTarget(api.route.current)
-}
-
 function isPromptHandleActive(api: Api, state: PluginState, handle: PromptHandle): boolean {
-  if (!isPromptTargetActive(api.route.current, handle.target)) return false
+  const route = api.route.current
+  const target = handle.target
+  if (target.name === "home") {
+    if (route.name !== "home") return false
+  } else if (!isSessionRoute(route) || route.params.sessionID !== target.sessionID) {
+    return false
+  }
   if (api.state.path.directory !== handle.directory) return false
 
   if (handle.ref) {
@@ -217,7 +184,7 @@ async function restorePrompt(
     return true
   }
 
-  return writePrompt(api, state, handle, prompt.input, signal, prompt)
+  return false
 }
 
 function gatherContext(api: Api): string {
@@ -231,14 +198,14 @@ function gatherContext(api: Api): string {
     const sessionID = route.params.sessionID
     const messages = api.state.session.messages(sessionID)
 
-    const userMessages = messages.filter(isUserMessage)
+    const userMessages = messages.filter((message): message is Extract<Message, { role: "user" }> => message.role === "user")
     const recent = userMessages.slice(-MAX_RECENT_MESSAGES).reverse()
     if (recent.length > 0) {
       const prompts: string[] = []
       for (const msg of recent) {
         const text = extractVisibleText(api.state.part(msg.id))
         if (text) {
-          prompts.push(truncate(text, MAX_PROMPT_PREVIEW_LENGTH))
+          prompts.push(text.length > MAX_PROMPT_PREVIEW_LENGTH ? `${text.slice(0, MAX_PROMPT_PREVIEW_LENGTH)}...` : text)
         }
       }
       if (prompts.length > 0) {
@@ -257,19 +224,6 @@ function gatherContext(api: Api): string {
   return sections.join("\n\n")
 }
 
-function buildUserMessage(input: string, context: string): string {
-  const sections = [
-    "Rewrite the following user draft into a stronger prompt.",
-    `User draft:\n${input}`,
-  ]
-
-  if (context) {
-    sections.splice(1, 0, `Workspace context (use only if directly relevant):\n${context}`)
-  }
-
-  return sections.join("\n\n")
-}
-
 async function enhanceWithModel(
   api: Api,
   options: PluginOptions | undefined,
@@ -279,11 +233,18 @@ async function enhanceWithModel(
   const directory = api.state.path.directory
   const model = resolveEnhancerModel(api, options)
   const context = gatherContext(api)
+  const userMessage = context
+    ? [
+        "Rewrite the following user draft into a stronger prompt.",
+        `Workspace context (use only if directly relevant):\n${context}`,
+        `User draft:\n${input}`,
+      ].join("\n\n")
+    : ["Rewrite the following user draft into a stronger prompt.", `User draft:\n${input}`].join("\n\n")
 
   const created = await api.client.session.create(
     {
       directory,
-      title: makeTempSessionTitle(),
+      title: `Prompt Enhancer ${Math.random().toString(36).slice(2, 8)}`,
     },
     { signal, throwOnError: true },
   )
@@ -301,7 +262,7 @@ async function enhanceWithModel(
         parts: [
           {
             type: "text",
-            text: buildUserMessage(input, context),
+            text: userMessage,
           },
         ],
       },
@@ -336,7 +297,11 @@ function openEnhanceDialog(
 
   if (signal.aborted) return
 
-  const target = currentPromptTarget(api, state)
+  const target = state.promptTarget ?? (api.route.current.name === "home"
+    ? { name: "home" as const }
+    : isSessionRoute(api.route.current)
+      ? { name: "session" as const, sessionID: api.route.current.params.sessionID }
+      : undefined)
   if (!target) {
     api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enhancement only works from a prompt." })
     return
