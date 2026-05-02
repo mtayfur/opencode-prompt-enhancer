@@ -65,6 +65,17 @@ type Api = Parameters<TuiPlugin>[0]
 type PluginState = {
   enhancing: boolean
   promptRef?: TuiPromptRef
+  promptTarget?: PromptTarget
+}
+
+type PromptTarget =
+  | { name: "home", workspaceID?: string }
+  | { name: "session", sessionID: string }
+
+type PromptHandle = {
+  target: PromptTarget
+  directory: string
+  ref?: TuiPromptRef
 }
 
 function parseModelString(value: string | undefined): ModelRef | undefined {
@@ -134,40 +145,117 @@ function nextPromptInfo(prompt: TuiPromptInfo, input: string): TuiPromptInfo {
   }
 }
 
-function currentPromptText(state: PluginState): string {
-  return state.promptRef?.current.input ?? ""
+function samePromptTarget(left: PromptTarget | undefined, right: PromptTarget | undefined): boolean {
+  if (!left || !right || left.name !== right.name) return false
+  if (left.name === "home" && right.name === "home") {
+    return left.workspaceID === right.workspaceID
+  }
+  if (left.name === "session" && right.name === "session") {
+    return left.sessionID === right.sessionID
+  }
+  return false
 }
 
-function bindPromptRef(state: PluginState, forwarded: ((ref: TuiPromptRef | undefined) => void) | undefined, ref: TuiPromptRef | undefined): void {
-  state.promptRef = ref
+function resolvePromptTarget(route: TuiRouteCurrent, workspaceID?: string): PromptTarget | undefined {
+  if (route.name === "home") return { name: "home", workspaceID }
+  if (isSessionRoute(route)) {
+    return { name: "session", sessionID: route.params.sessionID }
+  }
+  return undefined
+}
+
+function isPromptTargetActive(route: TuiRouteCurrent, target: PromptTarget): boolean {
+  if (target.name === "home") return route.name === "home"
+  return isSessionRoute(route) && route.params.sessionID === target.sessionID
+}
+
+function currentPromptTarget(api: Api, state: PluginState): PromptTarget | undefined {
+  return state.promptTarget ?? resolvePromptTarget(api.route.current)
+}
+
+function isPromptHandleActive(api: Api, state: PluginState, handle: PromptHandle): boolean {
+  if (!isPromptTargetActive(api.route.current, handle.target)) return false
+  if (api.state.path.directory !== handle.directory) return false
+
+  if (handle.ref) {
+    return state.promptRef === handle.ref && samePromptTarget(state.promptTarget, handle.target)
+  }
+
+  return true
+}
+
+function bindPromptRef(
+  state: PluginState,
+  target: PromptTarget,
+  forwarded: ((ref: TuiPromptRef | undefined) => void) | undefined,
+  ref: TuiPromptRef | undefined,
+): void {
+  if (ref) {
+    state.promptRef = ref
+    state.promptTarget = target
+  } else if (samePromptTarget(state.promptTarget, target)) {
+    state.promptRef = undefined
+    state.promptTarget = undefined
+  }
+
   forwarded?.(ref)
 }
 
-async function writePrompt(api: Api, state: PluginState, input: string, signal: AbortSignal, template?: TuiPromptInfo): Promise<void> {
-  const promptRef = state.promptRef
+async function clearPrompt(api: Api, state: PluginState, handle: PromptHandle, signal: AbortSignal, template?: TuiPromptInfo): Promise<boolean> {
+  if (!isPromptHandleActive(api, state, handle)) return false
+
+  const promptRef = handle.ref
+  if (promptRef) {
+    promptRef.set(nextPromptInfo(template ?? promptRef.current, ""))
+    return true
+  }
+
+  await api.client.tui.clearPrompt({ directory: handle.directory }, { signal, throwOnError: true } as const)
+  return true
+}
+
+async function writePrompt(
+  api: Api,
+  state: PluginState,
+  handle: PromptHandle,
+  input: string,
+  signal: AbortSignal,
+  template?: TuiPromptInfo,
+): Promise<boolean> {
+  if (!isPromptHandleActive(api, state, handle)) return false
+
+  const promptRef = handle.ref
   if (promptRef) {
     promptRef.set(nextPromptInfo(template ?? promptRef.current, input))
     promptRef.focus()
-    return
+    return true
   }
 
-  const directory = api.state.path.directory
   const requestOptions = { signal, throwOnError: true } as const
-  await api.client.tui.clearPrompt({ directory }, requestOptions)
+  await api.client.tui.clearPrompt({ directory: handle.directory }, requestOptions)
   if (input) {
-    await api.client.tui.appendPrompt({ directory, text: input }, requestOptions)
+    await api.client.tui.appendPrompt({ directory: handle.directory, text: input }, requestOptions)
   }
+  return true
 }
 
-async function restorePrompt(api: Api, state: PluginState, prompt: TuiPromptInfo, signal: AbortSignal): Promise<void> {
-  const promptRef = state.promptRef
+async function restorePrompt(
+  api: Api,
+  state: PluginState,
+  handle: PromptHandle,
+  prompt: TuiPromptInfo,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (!isPromptHandleActive(api, state, handle)) return false
+
+  const promptRef = handle.ref
   if (promptRef) {
     promptRef.set(clonePromptInfo(prompt))
     promptRef.focus()
-    return
+    return true
   }
 
-  await writePrompt(api, state, prompt.input, signal, prompt)
+  return writePrompt(api, state, handle, prompt.input, signal, prompt)
 }
 
 function gatherContext(api: Api): string {
@@ -297,7 +385,19 @@ function openEnhanceDialog(
 
   if (signal.aborted) return
 
-  const initialValue = currentPromptText(state)
+  const target = currentPromptTarget(api, state)
+  if (!target) {
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt enhancement is only available from a prompt view." })
+    return
+  }
+
+  const handle: PromptHandle = {
+    target,
+    directory: api.state.path.directory,
+    ref: state.promptRef,
+  }
+  const originalPrompt = handle.ref ? clonePromptInfo(handle.ref.current) : undefined
+  const initialValue = originalPrompt?.input ?? ""
 
   api.ui.dialog.replace(() => (
     <api.ui.DialogPrompt
@@ -313,11 +413,13 @@ function openEnhanceDialog(
           return
         }
 
-        const originalPrompt = state.promptRef ? clonePromptInfo(state.promptRef.current) : undefined
-        state.enhancing = true
-        if (originalPrompt) {
-          state.promptRef?.set(nextPromptInfo(originalPrompt, ""))
+        if (!isPromptHandleActive(api, state, handle)) {
+          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while the dialog was open." })
+          api.ui.dialog.clear()
+          return
         }
+
+        state.enhancing = true
         api.ui.dialog.clear()
         api.ui.toast({
           variant: "info",
@@ -328,10 +430,29 @@ function openEnhanceDialog(
 
         void (async () => {
           try {
+            const cleared = await clearPrompt(api, state, handle, signal, originalPrompt)
+            if (!cleared) {
+              api.ui.toast({
+                variant: "warning",
+                title: TOAST_TITLE,
+                message: "Prompt changed before enhancement started.",
+              })
+              return
+            }
+
             const enhanced = await enhanceWithModel(api, options, input, signal)
             if (signal.aborted) return
 
-            await writePrompt(api, state, enhanced, signal, originalPrompt)
+            const wrote = await writePrompt(api, state, handle, enhanced, signal, originalPrompt)
+            if (!wrote) {
+              api.ui.toast({
+                variant: "warning",
+                title: TOAST_TITLE,
+                message: "Enhanced prompt is ready, but the original prompt is no longer active.",
+              })
+              return
+            }
+
             api.ui.toast({
               variant: "success",
               title: "Prompt enhanced",
@@ -341,15 +462,26 @@ function openEnhanceDialog(
           } catch (error) {
             if (signal.aborted) return
 
+            let restored = true
             if (originalPrompt) {
               try {
-                await restorePrompt(api, state, originalPrompt, signal)
+                restored = await restorePrompt(api, state, handle, originalPrompt, signal)
               } catch {
                 // Best-effort restore; do not suppress the error toast.
+                restored = false
+              }
+            } else {
+              try {
+                restored = await writePrompt(api, state, handle, input, signal)
+              } catch {
+                restored = false
               }
             }
 
-            const message = error instanceof Error ? error.message : "Model enhancement failed."
+            const baseMessage = error instanceof Error ? error.message : "Model enhancement failed."
+            const message = restored
+              ? baseMessage
+              : `${baseMessage} Original prompt could not be restored because the active prompt changed.`
             api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
           } finally {
             state.enhancing = false
@@ -368,7 +500,7 @@ const tui: TuiPlugin = async (api, options) => {
       home_prompt(_ctx, props) {
         return (
           <api.ui.Prompt
-            ref={(ref) => bindPromptRef(state, props.ref, ref)}
+            ref={(ref) => bindPromptRef(state, { name: "home", workspaceID: props.workspace_id }, props.ref, ref)}
             workspaceID={props.workspace_id}
             right={<api.ui.Slot name="home_prompt_right" workspace_id={props.workspace_id} />}
             placeholders={HOME_PROMPT_PLACEHOLDERS}
@@ -378,7 +510,7 @@ const tui: TuiPlugin = async (api, options) => {
       session_prompt(_ctx, props) {
         return (
           <api.ui.Prompt
-            ref={(ref) => bindPromptRef(state, props.ref, ref)}
+            ref={(ref) => bindPromptRef(state, { name: "session", sessionID: props.session_id }, props.ref, ref)}
             sessionID={props.session_id}
             visible={props.visible}
             disabled={props.disabled}
@@ -413,6 +545,8 @@ const tui: TuiPlugin = async (api, options) => {
   api.lifecycle.onDispose(() => {
     unregister()
     state.enhancing = false
+    state.promptRef = undefined
+    state.promptTarget = undefined
   })
 }
 
