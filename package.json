@@ -27,6 +27,7 @@
   "peerDependencies": {
     "@opencode-ai/plugin": "*",
     "@opencode-ai/sdk": "*",
+    "@opentui/core": "*",
     "@opentui/solid": "*",
     "solid-js": "*"
   },

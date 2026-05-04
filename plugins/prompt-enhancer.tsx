@@ -27,6 +27,8 @@ type PluginState = {
   enhancing: boolean
   promptRef?: TuiPromptRef
   promptTarget?: PromptTarget
+  lastOriginal?: TuiPromptInfo
+  lastEnhancedInput?: string
 }
 
 type PromptTarget =
@@ -193,6 +195,11 @@ function gatherContext(api: Api): string {
   const dir = api.state.path.directory
   sections.push(`Working directory: ${dir}`)
 
+  const branch = api.state.vcs?.branch
+  if (branch) {
+    sections.push(`Current branch: ${branch}`)
+  }
+
   const route = api.route.current
   if (isSessionRoute(route)) {
     const sessionID = route.params.sessionID
@@ -341,7 +348,7 @@ function openEnhanceDialog(
           variant: "info",
           title: TOAST_TITLE,
           message: "Enhancing prompt...",
-          duration: 15_000,
+          duration: 8_000,
         })
 
         void (async () => {
@@ -368,6 +375,9 @@ function openEnhanceDialog(
               })
               return
             }
+
+            state.lastOriginal = originalPrompt
+            state.lastEnhancedInput = enhanced
 
             api.ui.toast({
               variant: "success",
@@ -397,7 +407,7 @@ function openEnhanceDialog(
             const baseMessage = error instanceof Error ? error.message : "Prompt enhancement failed."
             const message = restored
               ? baseMessage
-              : `${baseMessage} Original prompt could not be restored because the prompt changed.`
+              : `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
             api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
           } finally {
             state.enhancing = false
@@ -406,6 +416,72 @@ function openEnhanceDialog(
       }}
     />
   ))
+}
+
+function revertEnhancement(
+  api: Api,
+  state: PluginState,
+  signal: AbortSignal,
+): void {
+  if (!state.lastOriginal) {
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "No enhancement to revert." })
+    return
+  }
+
+  const target = state.promptTarget
+  if (!target) {
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Revert only works from a prompt." })
+    return
+  }
+
+  const handle: PromptHandle = {
+    target,
+    directory: api.state.path.directory,
+    ref: state.promptRef,
+  }
+
+  if (!isPromptHandleActive(api, state, handle)) {
+    api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed since enhancement." })
+    return
+  }
+
+  const currentInput = handle.ref?.current.input ?? ""
+  if (currentInput !== state.lastEnhancedInput) {
+    api.ui.toast({
+      variant: "warning",
+      title: TOAST_TITLE,
+      message: "Prompt was manually changed after enhancement. Revert skipped.",
+    })
+    return
+  }
+
+  void (async () => {
+    try {
+      const wrote = await restorePrompt(api, state, handle, state.lastOriginal!, signal)
+      if (!wrote) {
+        api.ui.toast({
+          variant: "warning",
+          title: TOAST_TITLE,
+          message: "Prompt changed while reverting.",
+        })
+        return
+      }
+
+      state.lastOriginal = undefined
+      state.lastEnhancedInput = undefined
+
+      api.ui.toast({
+        variant: "success",
+        title: TOAST_TITLE,
+        message: "Reverted to original prompt.",
+        duration: 3000,
+      })
+    } catch (error) {
+      if (signal.aborted) return
+      const message = error instanceof Error ? error.message : "Revert failed."
+      api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
+    }
+  })()
 }
 
 const tui: TuiPlugin = async (api, options) => {
@@ -455,19 +531,36 @@ const tui: TuiPlugin = async (api, options) => {
         openEnhanceDialog(api, options, state, api.lifecycle.signal)
       },
     },
+    {
+      title: "Revert Enhanced Prompt",
+      value: "prompt-enhancer.revert",
+      description: "Revert last prompt enhancement (Ctrl+Shift+E)",
+      category: "Prompt",
+      keybind: "ctrl+shift+e",
+      slash: {
+        name: "revert-enhance",
+        aliases: ["revert-enhancement"],
+      },
+      onSelect: () => {
+        revertEnhancement(api, state, api.lifecycle.signal)
+      },
+    },
   ])
 
   api.lifecycle.onDispose(() => {
     unregister()
+    api.ui.dialog.clear()
     state.enhancing = false
     state.promptRef = undefined
     state.promptTarget = undefined
+    state.lastOriginal = undefined
+    state.lastEnhancedInput = undefined
   })
 }
 
-const plugin: TuiPluginModule & { id: string } = {
+const plugin = {
   id: "prompt-enhancer",
   tui,
-}
+} satisfies TuiPluginModule & { id: string }
 
 export default plugin
