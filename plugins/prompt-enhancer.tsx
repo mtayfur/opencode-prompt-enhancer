@@ -522,10 +522,6 @@ const tui: TuiPlugin = async (api, options) => {
       category: "Prompt",
       keybind: "ctrl+e",
       suggested: true,
-      slash: {
-        name: "enhance",
-        aliases: ["enhance-prompt"],
-      },
       onSelect: () => {
         openEnhanceDialog(api, options, state, api.lifecycle.signal)
       },
@@ -536,10 +532,6 @@ const tui: TuiPlugin = async (api, options) => {
       description: "Revert last prompt enhancement (Ctrl+Shift+E)",
       category: "Prompt",
       keybind: "ctrl+shift+e",
-      slash: {
-        name: "revert-enhance",
-        aliases: ["revert-enhancement"],
-      },
       onSelect: () => {
         revertEnhancement(api, state, api.lifecycle.signal)
       },
