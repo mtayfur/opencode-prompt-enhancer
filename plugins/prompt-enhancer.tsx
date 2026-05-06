@@ -16,8 +16,7 @@ const MAX_CHANGED_FILES = 25
 const MAX_PROMPT_PREVIEW_LENGTH = 250
 const ENHANCEMENT_TIMEOUT_MS = 60_000
 const ENHANCEMENT_ANIMATION_INTERVAL_MS = 250
-const PROGRESS_TOAST_DURATION_MS = 2_000
-const RESULT_TOAST_DURATION_MS = 2_000
+const TOAST_DURATION_MS = 3_000
 const ENHANCEMENT_CANCELED_MESSAGE = "Prompt enhancement canceled."
 const ENHANCEMENT_ANIMATION_FRAMES = [
   "Enhancing prompt",
@@ -36,6 +35,11 @@ type ModelRef = {
 type Api = Parameters<TuiPlugin>[0]
 type ActiveEnhancement = {
   controller: AbortController
+  stopAnimation?: () => void
+  handle: PromptHandle
+  originalPrompt?: TuiPromptInfo
+  input: string
+  canceled?: boolean
 }
 
 type PluginState = {
@@ -244,6 +248,25 @@ async function restorePrompt(
   return true
 }
 
+async function cancelActiveEnhancement(
+  api: Api,
+  state: PluginState,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const active = state.activeEnhancement
+  if (!state.enhancing || !active) return false
+
+  active.canceled = true
+  active.stopAnimation?.()
+  active.controller.abort(new Error(ENHANCEMENT_CANCELED_MESSAGE))
+
+  if (active.originalPrompt) {
+    return restorePrompt(api, state, active.handle, active.originalPrompt, signal)
+  }
+
+  return writePrompt(api, state, active.handle, active.input, signal)
+}
+
 function startEnhancementAnimation(
   api: Api,
   state: PluginState,
@@ -311,8 +334,6 @@ function gatherContext(api: Api): string {
       const files = diff.slice(0, MAX_CHANGED_FILES).map((f) => `  @${f.file}`)
       sections.push(`Files changed in session:\n${files.join("\n")}`)
     }
-
-
   }
 
   return sections.join("\n\n")
@@ -435,12 +456,17 @@ function openEnhanceDialog(
           variant: "info",
           title: TOAST_TITLE,
           message: "Enhancing prompt...",
-          duration: PROGRESS_TOAST_DURATION_MS,
+          duration: TOAST_DURATION_MS,
         })
 
         const enhancementController = new AbortController()
         const onLifecycleAbort = () => enhancementController.abort(signal.reason)
-        state.activeEnhancement = { controller: enhancementController }
+        state.activeEnhancement = {
+          controller: enhancementController,
+          handle,
+          originalPrompt,
+          input,
+        }
         if (signal.aborted) {
           enhancementController.abort(signal.reason)
         } else {
@@ -461,6 +487,9 @@ function openEnhanceDialog(
             }
 
             stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
+            if (state.activeEnhancement) {
+              state.activeEnhancement.stopAnimation = stopAnimation
+            }
 
             const enhanced = await enhanceWithModel(api, options, input, enhancementController.signal)
             if (signal.aborted) return
@@ -490,12 +519,18 @@ function openEnhanceDialog(
               variant: "success",
               title: "Prompt enhanced",
               message: "Enhanced prompt added to input.",
-              duration: RESULT_TOAST_DURATION_MS,
+              duration: TOAST_DURATION_MS,
             })
           } catch (error) {
             if (signal.aborted) return
 
             stopAnimation()
+
+            const canceled = enhancementController.signal.aborted && !signal.aborted
+            if (canceled && state.activeEnhancement?.canceled) {
+              // cancelActiveEnhancement already stopped the animation and restored the prompt.
+              return
+            }
 
             let restored = true
             if (originalPrompt) {
@@ -512,8 +547,6 @@ function openEnhanceDialog(
                 restored = false
               }
             }
-
-            const canceled = enhancementController.signal.aborted && !signal.aborted
             const baseMessage = canceled
               ? ENHANCEMENT_CANCELED_MESSAGE
               : error instanceof Error
@@ -545,7 +578,26 @@ function revertEnhancement(
   signal: AbortSignal,
 ): void {
   if (state.enhancing && state.activeEnhancement) {
-    state.activeEnhancement.controller.abort(new Error(ENHANCEMENT_CANCELED_MESSAGE))
+    void (async () => {
+      try {
+        const restored = await cancelActiveEnhancement(api, state, signal)
+        if (!restored) {
+          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while canceling." })
+          return
+        }
+
+        api.ui.toast({
+          variant: "info",
+          title: TOAST_TITLE,
+          message: "Enhancement canceled. Original prompt restored.",
+          duration: TOAST_DURATION_MS,
+        })
+      } catch (error) {
+        if (signal.aborted) return
+        const message = error instanceof Error ? error.message : "Cancel failed."
+        api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
+      }
+    })()
     return
   }
 
@@ -600,7 +652,7 @@ function revertEnhancement(
         variant: "success",
         title: TOAST_TITLE,
         message: "Reverted to original prompt.",
-        duration: RESULT_TOAST_DURATION_MS,
+        duration: TOAST_DURATION_MS,
       })
     } catch (error) {
       if (signal.aborted) return
