@@ -14,6 +14,17 @@ import { ENHANCER_SYSTEM_PROMPT } from "./enhancer-system-prompt"
 const MAX_RECENT_MESSAGES = 3
 const MAX_CHANGED_FILES = 25
 const MAX_PROMPT_PREVIEW_LENGTH = 250
+const ENHANCEMENT_TIMEOUT_MS = 60_000
+const ENHANCEMENT_ANIMATION_INTERVAL_MS = 250
+const PROGRESS_TOAST_DURATION_MS = 2_000
+const RESULT_TOAST_DURATION_MS = 2_000
+const ENHANCEMENT_CANCELED_MESSAGE = "Prompt enhancement canceled."
+const ENHANCEMENT_ANIMATION_FRAMES = [
+  "Enhancing prompt",
+  "Enhancing prompt.",
+  "Enhancing prompt..",
+  "Enhancing prompt...",
+] as const
 const DIALOG_TITLE = "Enhance Prompt"
 const TOAST_TITLE = "Prompt enhancer"
 
@@ -23,8 +34,13 @@ type ModelRef = {
 }
 
 type Api = Parameters<TuiPlugin>[0]
+type ActiveEnhancement = {
+  controller: AbortController
+}
+
 type PluginState = {
   enhancing: boolean
+  activeEnhancement?: ActiveEnhancement
   promptRef?: TuiPromptRef
   promptTarget?: PromptTarget
   lastOriginal?: TuiPromptInfo
@@ -87,6 +103,39 @@ function nextPromptInfo(prompt: TuiPromptInfo, input: string): TuiPromptInfo {
   }
 }
 
+function errorFromReason(reason: unknown, fallbackMessage: string): Error {
+  return reason instanceof Error ? reason : new Error(fallbackMessage)
+}
+
+async function withRequestTimeout<T>(
+  signal: AbortSignal,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController()
+  const timeoutMessage = `Prompt enhancement timed out after ${Math.floor(timeoutMs / 1000)} seconds.`
+  const onAbort = () => controller.abort(signal.reason)
+  const timeout = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs)
+
+  if (signal.aborted) {
+    controller.abort(signal.reason)
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true })
+  }
+
+  try {
+    return await run(controller.signal)
+  } catch (error) {
+    if (controller.signal.aborted && !signal.aborted) {
+      throw errorFromReason(controller.signal.reason, timeoutMessage)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+    signal.removeEventListener("abort", onAbort)
+  }
+}
+
 function samePromptTarget(left: PromptTarget | undefined, right: PromptTarget | undefined): boolean {
   if (!left || !right || left.name !== right.name) return false
   if (left.name === "home" && right.name === "home") {
@@ -138,6 +187,7 @@ async function clearPrompt(api: Api, state: PluginState, handle: PromptHandle, s
   const promptRef = handle.ref
   if (promptRef) {
     promptRef.set(nextPromptInfo(template ?? promptRef.current, ""))
+    promptRef.blur()
     return true
   }
 
@@ -186,7 +236,43 @@ async function restorePrompt(
     return true
   }
 
-  return false
+  const requestOptions = { signal, throwOnError: true } as const
+  await api.client.tui.clearPrompt({ directory: handle.directory }, requestOptions)
+  if (prompt.input) {
+    await api.client.tui.appendPrompt({ directory: handle.directory, text: prompt.input }, requestOptions)
+  }
+  return true
+}
+
+function startEnhancementAnimation(
+  api: Api,
+  state: PluginState,
+  handle: PromptHandle,
+  template?: TuiPromptInfo,
+): () => void {
+  const promptRef = handle.ref
+  if (!promptRef) return () => {}
+
+  let frame = 0
+  let stopped = false
+
+  const render = () => {
+    if (stopped) return
+    if (!isPromptHandleActive(api, state, handle)) {
+      stopped = true
+      return
+    }
+
+    promptRef.set(nextPromptInfo(template ?? promptRef.current, ENHANCEMENT_ANIMATION_FRAMES[frame]))
+    frame = (frame + 1) % ENHANCEMENT_ANIMATION_FRAMES.length
+  }
+
+  render()
+  const interval = setInterval(render, ENHANCEMENT_ANIMATION_INTERVAL_MS)
+  return () => {
+    stopped = true
+    clearInterval(interval)
+  }
 }
 
 function gatherContext(api: Api): string {
@@ -259,20 +345,24 @@ async function enhanceWithModel(
   if (!tempSessionID) throw new Error("Failed to start prompt enhancer.")
 
   try {
-    const response = await api.client.session.prompt(
-      {
-        sessionID: tempSessionID,
-        directory,
-        model,
-        system: ENHANCER_SYSTEM_PROMPT,
-        parts: [
-          {
-            type: "text",
-            text: userMessage,
-          },
-        ],
-      },
-      { signal, throwOnError: true },
+    const response = await withRequestTimeout(
+      signal,
+      ENHANCEMENT_TIMEOUT_MS,
+      (requestSignal) => api.client.session.prompt(
+        {
+          sessionID: tempSessionID,
+          directory,
+          model,
+          system: ENHANCER_SYSTEM_PROMPT,
+          parts: [
+            {
+              type: "text",
+              text: userMessage,
+            },
+          ],
+        },
+        { signal: requestSignal, throwOnError: true },
+      ),
     )
 
     const parts = response.data?.parts
@@ -282,11 +372,9 @@ async function enhanceWithModel(
     if (!enhanced) throw new Error("Enhancer returned no text.")
     return enhanced
   } finally {
-    try {
-      await api.client.session.delete({ sessionID: tempSessionID, directory })
-    } catch {
+    void api.client.session.delete({ sessionID: tempSessionID, directory }).catch(() => {
       // Best-effort cleanup for the temporary enhancement session.
-    }
+    })
   }
 }
 
@@ -347,10 +435,20 @@ function openEnhanceDialog(
           variant: "info",
           title: TOAST_TITLE,
           message: "Enhancing prompt...",
-          duration: 8_000,
+          duration: PROGRESS_TOAST_DURATION_MS,
         })
 
+        const enhancementController = new AbortController()
+        const onLifecycleAbort = () => enhancementController.abort(signal.reason)
+        state.activeEnhancement = { controller: enhancementController }
+        if (signal.aborted) {
+          enhancementController.abort(signal.reason)
+        } else {
+          signal.addEventListener("abort", onLifecycleAbort, { once: true })
+        }
+
         void (async () => {
+          let stopAnimation = () => {}
           try {
             const cleared = await clearPrompt(api, state, handle, signal, originalPrompt)
             if (!cleared) {
@@ -362,8 +460,15 @@ function openEnhanceDialog(
               return
             }
 
-            const enhanced = await enhanceWithModel(api, options, input, signal)
+            stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
+
+            const enhanced = await enhanceWithModel(api, options, input, enhancementController.signal)
             if (signal.aborted) return
+            if (enhancementController.signal.aborted) {
+              throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
+            }
+
+            stopAnimation()
 
             const wrote = await writePrompt(api, state, handle, enhanced, signal, originalPrompt)
             if (!wrote) {
@@ -374,6 +479,9 @@ function openEnhanceDialog(
               })
               return
             }
+            if (enhancementController.signal.aborted) {
+              throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
+            }
 
             state.lastOriginal = originalPrompt
             state.lastEnhancedInput = enhanced
@@ -382,10 +490,12 @@ function openEnhanceDialog(
               variant: "success",
               title: "Prompt enhanced",
               message: "Enhanced prompt added to input.",
-              duration: 3000,
+              duration: RESULT_TOAST_DURATION_MS,
             })
           } catch (error) {
             if (signal.aborted) return
+
+            stopAnimation()
 
             let restored = true
             if (originalPrompt) {
@@ -403,12 +513,24 @@ function openEnhanceDialog(
               }
             }
 
-            const baseMessage = error instanceof Error ? error.message : "Prompt enhancement failed."
+            const canceled = enhancementController.signal.aborted && !signal.aborted
+            const baseMessage = canceled
+              ? ENHANCEMENT_CANCELED_MESSAGE
+              : error instanceof Error
+                ? error.message
+                : "Prompt enhancement failed."
             const message = restored
-              ? baseMessage
+              ? canceled
+                ? "Enhancement canceled. Original prompt restored."
+                : baseMessage
               : `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
-            api.ui.toast({ variant: "error", title: TOAST_TITLE, message })
+            api.ui.toast({ variant: canceled && restored ? "info" : "error", title: TOAST_TITLE, message })
           } finally {
+            stopAnimation()
+            signal.removeEventListener("abort", onLifecycleAbort)
+            if (state.activeEnhancement?.controller === enhancementController) {
+              state.activeEnhancement = undefined
+            }
             state.enhancing = false
           }
         })()
@@ -422,6 +544,11 @@ function revertEnhancement(
   state: PluginState,
   signal: AbortSignal,
 ): void {
+  if (state.enhancing && state.activeEnhancement) {
+    state.activeEnhancement.controller.abort(new Error(ENHANCEMENT_CANCELED_MESSAGE))
+    return
+  }
+
   if (!state.lastOriginal) {
     api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "No enhancement to revert." })
     return
@@ -473,7 +600,7 @@ function revertEnhancement(
         variant: "success",
         title: TOAST_TITLE,
         message: "Reverted to original prompt.",
-        duration: 3000,
+        duration: RESULT_TOAST_DURATION_MS,
       })
     } catch (error) {
       if (signal.aborted) return
@@ -541,6 +668,8 @@ const tui: TuiPlugin = async (api, options) => {
   api.lifecycle.onDispose(() => {
     unregister()
     api.ui.dialog.clear()
+    state.activeEnhancement?.controller.abort(api.lifecycle.signal.reason)
+    state.activeEnhancement = undefined
     state.enhancing = false
     state.promptRef = undefined
     state.promptTarget = undefined
