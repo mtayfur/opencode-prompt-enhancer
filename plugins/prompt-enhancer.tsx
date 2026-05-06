@@ -222,9 +222,10 @@ function gatherContext(api: Api): string {
 
     const diff = api.state.session.diff(sessionID)
     if (diff.length > 0) {
-      const files = diff.slice(0, MAX_CHANGED_FILES).map((f) => `  ${f.file}`)
+      const files = diff.slice(0, MAX_CHANGED_FILES).map((f) => `  @${f.file}`)
       sections.push(`Files changed in session:\n${files.join("\n")}`)
     }
+
 
   }
 
@@ -240,13 +241,11 @@ async function enhanceWithModel(
   const directory = api.state.path.directory
   const model = resolveEnhancerModel(api, options)
   const context = gatherContext(api)
-  const userMessage = context
-    ? [
-        "Rewrite the following user draft into a stronger prompt.",
-        `Workspace context (use only if directly relevant):\n${context}`,
-        `User draft:\n${input}`,
-      ].join("\n\n")
-    : ["Rewrite the following user draft into a stronger prompt.", `User draft:\n${input}`].join("\n\n")
+  const userMessage = [
+    "Rewrite the developer draft below into a clear, direct prompt for a coding agent. Preserve the original intent, scope, and mode. Only make references more specific when the context section supports it.",
+    `--- CONTEXT (metadata only — resolve draft references, do not invent) ---\n${context}\n---`,
+    `--- DRAFT ---\n${input}\n---`,
+  ].join("\n\n")
 
   const created = await api.client.session.create(
     {
