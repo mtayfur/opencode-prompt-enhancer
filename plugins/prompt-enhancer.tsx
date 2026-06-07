@@ -430,6 +430,7 @@ function openEnhanceDialog(
   const originalPrompt = handle.ref ? clonePromptInfo(handle.ref.current) : undefined
   const initialValue = originalPrompt?.input ?? ""
 
+  api.ui.dialog.setSize("large")
   api.ui.dialog.replace(() => (
     <api.ui.DialogPrompt
       title={DIALOG_TITLE}
