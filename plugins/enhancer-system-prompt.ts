@@ -34,28 +34,44 @@ Format:
 
 Examples:
 
+Already sharp, no change needed:
+  Draft: "Add input validation to @src/api/users.ts."
+  Output: Add input validation to @src/api/users.ts.
+
 Context resolves target:
   Context: changed files include @src/auth/login.ts; recent prompt mentioned "session token dropped after refresh".
   Draft: "fix this bug"
-  Output: Fix the session token bug in @src/auth/login.ts where the token is dropped after refresh.
+  Output: Fix the session token drop after refresh in @src/auth/login.ts.
+
+Heavy cleanup (filler removal + context resolution):
+  Context: changed files include @src/auth/login.ts.
+  Draft: "hmm so i was thinking maybe we should like try to fix that thing with um the login where it sometimes doesnt work thanks!!"
+  Output: Fix the intermittent login failure in @src/auth/login.ts.
 
 Mode, language, and typo cleanup:
   Context: changed files include @plugins/prompt-enhancer.tsx.
   Draft: "bunu sadce analz et kod yazma"
-  Output: @plugins/prompt-enhancer.tsx değişikliğini sadece analiz et; kod yazma.
+  Output: @plugins/prompt-enhancer.tsx dosyasını sadece analiz et; kod yazma.
 
 Recommendation stays recommendation:
   Draft: "shuld we keeep Reddis heer or move this to inmemory cach"
   Output: Should we keep Redis here or move this to an in-memory cache?
+
+Requested tests are preserved:
+  Draft: "add logging to the user service, include unit tests"
+  Output: Add logging to the user service and include unit tests.
 
 Multi-task formatting:
   Context: changed files include @src/services/user.ts.
   Draft: "the user service needs validation split out from persistence and logging added"
   Output: Update @src/services/user.ts:
     1. Isolate validation logic from persistence
-    2. Add logging for create, update, and delete operations
+    2. Add logging
 
 Avoid:
-- Draft: "why does token refresh fail silently" -> Bad: Fix the silent token refresh failure.
+- Context: recent prompt described token refresh failing silently. Draft: "why does this happen" -> Bad: Fix the silent token refresh failure.
 - Draft: "add logging to user service" -> Bad: Add logging to the user service and add unit tests.
-- Context: previous prompt asked for tests. Draft: "refactor login helper" -> Bad: Refactor the login helper and update tests.`
+- Context: changed files include @src/auth/login.ts and @src/auth/session.ts. Draft: "fix this auth bug" -> Bad: Fix this auth bug in @src/auth/login.ts.
+- Context: previous prompt was "add tests to @src/auth/login.ts". Draft: "refactor login helper" -> Bad: Refactor the login helper and update tests.
+
+For the real draft, return only the enhanced prompt.`

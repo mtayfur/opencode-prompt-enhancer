@@ -383,8 +383,7 @@ async function enhanceWithModel(
   const model = resolveEnhancerModel(api, options)
   const context = gatherContext(api)
   const userMessage = [
-    "Rewrite the developer draft below into a clear, direct prompt for a coding agent. Preserve the original intent, scope, and mode. Only make references more specific when the context section supports it.",
-    `--- CONTEXT (metadata only — resolve draft references, do not invent) ---\n${context}\n---`,
+    `--- CONTEXT ---\n${context}\n---`,
     `--- DRAFT ---\n${input}\n---`,
   ].join("\n\n")
 
