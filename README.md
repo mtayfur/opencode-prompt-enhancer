@@ -18,7 +18,19 @@ The enhancer uses:
 
 ## Install
 
-Add the package to OpenCode's `tui.json` plugin list:
+For local development without an npm release:
+
+```bash
+bun run setup
+```
+
+This replaces the released plugin entry in OpenCode's `tui.json` plugin list with the local checkout. To restore the released plugin entry:
+
+```bash
+bun run setup:uninstall
+```
+
+For npm install/publish flows, add the package to OpenCode's `tui.json` plugin list:
 
 ```jsonc
 {
