@@ -9,6 +9,8 @@ import type {
   TuiRouteCurrent,
   TuiSlotPlugin,
 } from "@opencode-ai/plugin/tui"
+import { useTerminalDimensions } from "@opentui/solid"
+import { Show, createMemo, createSignal } from "solid-js"
 import { ENHANCER_SYSTEM_PROMPT } from "./enhancer-system-prompt"
 
 const MAX_RECENT_MESSAGES = 3
@@ -25,6 +27,20 @@ const ENHANCEMENT_ANIMATION_FRAMES = [
   "Enhancing prompt...",
 ] as const
 const DIALOG_TITLE = "Enhance Prompt"
+const DIALOG_WIDTH_RATIO = 0.60
+const DIALOG_MAX_WIDTH = 120
+const DIALOG_MIN_WIDTH = 40
+const DIALOG_SCREEN_MARGIN_X = 4
+const DIALOG_SCREEN_MARGIN_Y = 4
+const DIALOG_HEIGHT = 24
+const DIALOG_PADDING_X = 2
+const DIALOG_PADDING_Y = 1
+const DIALOG_TEXTAREA_RESERVED_HEIGHT = 7
+const DIALOG_TEXTAREA_VERTICAL_PADDING = 2
+const DIALOG_BACKDROP_COLOR = "#000000"
+const DIALOG_BACKDROP_OPACITY = 0.65
+const DIALOG_PLACEHOLDER = "Describe the task..."
+const DIALOG_HINT = "Enter to enhance • Shift+Enter for newline • Esc to cancel"
 const TOAST_TITLE = "Prompt enhancer"
 
 type ModelRef = {
@@ -60,6 +76,20 @@ type PromptHandle = {
   directory: string
   ref?: TuiPromptRef
 }
+
+type DialogTextareaRef = {
+  plainText: string
+  cursorOffset: number
+  focus(): void
+}
+
+type EnhanceDialogState = {
+  initialValue: string
+  onCancel: () => void
+  onConfirm: (value: string) => void
+}
+
+type SetEnhanceDialog = (dialog: EnhanceDialogState | undefined) => void
 
 function parseModelString(value: string | undefined): ModelRef | undefined {
   if (!value) return undefined
@@ -109,6 +139,10 @@ function nextPromptInfo(prompt: TuiPromptInfo, input: string): TuiPromptInfo {
 
 function errorFromReason(reason: unknown, fallbackMessage: string): Error {
   return reason instanceof Error ? reason : new Error(fallbackMessage)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
 }
 
 async function withRequestTimeout<T>(
@@ -399,10 +433,108 @@ async function enhanceWithModel(
   }
 }
 
+function renderEnhanceDialog(api: Api, dialog: EnhanceDialogState) {
+  const theme = api.theme.current
+  const terminal = useTerminalDimensions()
+  const screenWidth = createMemo(() => Math.max(1, terminal().width))
+  const screenHeight = createMemo(() => Math.max(1, terminal().height))
+  const panelWidth = createMemo(() => {
+    const width = screenWidth()
+    const availableWidth = Math.max(1, width - DIALOG_SCREEN_MARGIN_X)
+    const minWidth = Math.min(DIALOG_MIN_WIDTH, availableWidth)
+    const maxWidth = Math.min(DIALOG_MAX_WIDTH, availableWidth)
+    return clamp(Math.floor(width * DIALOG_WIDTH_RATIO), minWidth, maxWidth)
+  })
+  const panelHeight = createMemo(() => {
+    const availableHeight = Math.max(1, screenHeight() - DIALOG_SCREEN_MARGIN_Y)
+    return Math.min(DIALOG_HEIGHT, availableHeight)
+  })
+  const textareaBoxHeight = createMemo(() => Math.max(1, panelHeight() - DIALOG_TEXTAREA_RESERVED_HEIGHT))
+  const textareaHeight = createMemo(() => Math.max(1, textareaBoxHeight() - DIALOG_TEXTAREA_VERTICAL_PADDING))
+  let dialogInput: DialogTextareaRef | undefined
+
+  return (
+    <box
+      position="absolute"
+      top={0}
+      left={0}
+      width={screenWidth()}
+      height={screenHeight()}
+      justifyContent="center"
+      alignItems="center"
+    >
+      <box
+        position="absolute"
+        top={0}
+        left={0}
+        width={screenWidth()}
+        height={screenHeight()}
+        backgroundColor={DIALOG_BACKDROP_COLOR}
+        opacity={DIALOG_BACKDROP_OPACITY}
+      />
+      <box
+        flexDirection="column"
+        width={panelWidth()}
+        height={panelHeight()}
+        gap={1}
+        paddingX={DIALOG_PADDING_X}
+        paddingY={DIALOG_PADDING_Y}
+        backgroundColor={theme.backgroundPanel}
+        border
+        borderColor={theme.border}
+      >
+        <text>{DIALOG_TITLE}</text>
+        <box
+          border
+          borderColor={theme.borderActive}
+          flexDirection="column"
+          height={textareaBoxHeight()}
+          paddingX={1}
+          paddingY={1}
+        >
+          <textarea
+            ref={(node: DialogTextareaRef | undefined) => {
+              dialogInput = node
+              if (!node) return
+              node.cursorOffset = node.plainText.length
+              queueMicrotask(() => {
+                if (dialogInput === node) node.focus()
+              })
+            }}
+            width="100%"
+            height={textareaHeight()}
+            initialValue={dialog.initialValue}
+            placeholder={DIALOG_PLACEHOLDER}
+            wrapMode="word"
+            textColor={theme.text}
+            placeholderColor={theme.textMuted}
+            backgroundColor={theme.backgroundPanel}
+            focusedBackgroundColor={theme.backgroundPanel}
+            focusedTextColor={theme.text}
+            cursorColor={theme.primary}
+            keyBindings={[
+              { name: "return", action: "submit" },
+              { name: "linefeed", action: "submit" },
+              { name: "return", shift: true, action: "newline" },
+              { name: "linefeed", shift: true, action: "newline" },
+            ]}
+            onKeyDown={(key) => {
+              if (key.name === "escape" || (key.ctrl && key.name === "c")) dialog.onCancel()
+            }}
+            onSubmit={() => dialog.onConfirm(dialogInput?.plainText ?? "")}
+          />
+        </box>
+        <text fg={theme.textMuted}>{DIALOG_HINT}</text>
+      </box>
+    </box>
+  )
+}
+
 function openEnhanceDialog(
   api: Api,
   options: PluginOptions | undefined,
   state: PluginState,
+  setEnhanceDialog: SetEnhanceDialog,
   signal: AbortSignal,
 ): void {
   if (state.enhancing) {
@@ -430,147 +562,144 @@ function openEnhanceDialog(
   const originalPrompt = handle.ref ? clonePromptInfo(handle.ref.current) : undefined
   const initialValue = originalPrompt?.input ?? ""
 
-  api.ui.dialog.setSize("large")
-  api.ui.dialog.replace(() => (
-    <api.ui.DialogPrompt
-      title={DIALOG_TITLE}
-      placeholder="Describe the task..."
-      value={initialValue}
-      onCancel={() => api.ui.dialog.clear()}
-      onConfirm={(value) => {
-        const input = value.trim()
-        if (!input) {
-          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter a prompt first." })
-          api.ui.dialog.clear()
+  const closeDialog = () => setEnhanceDialog(undefined)
+
+  const confirmInput = (value: string) => {
+    if (state.enhancing) return
+
+    const input = value.trim()
+    if (!input) {
+      api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter a prompt first." })
+      closeDialog()
+      return
+    }
+
+    if (!isPromptHandleActive(api, state, handle)) {
+      api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while dialog was open." })
+      closeDialog()
+      return
+    }
+
+    state.enhancing = true
+    closeDialog()
+    api.ui.toast({
+      variant: "info",
+      title: TOAST_TITLE,
+      message: "Enhancing prompt...",
+      duration: TOAST_DURATION_MS,
+    })
+
+    const enhancementController = new AbortController()
+    const onLifecycleAbort = () => enhancementController.abort(signal.reason)
+    state.activeEnhancement = {
+      controller: enhancementController,
+      handle,
+      originalPrompt,
+      input,
+    }
+    if (signal.aborted) {
+      enhancementController.abort(signal.reason)
+    } else {
+      signal.addEventListener("abort", onLifecycleAbort, { once: true })
+    }
+
+    void (async () => {
+      let stopAnimation = () => {}
+      try {
+        const cleared = await clearPrompt(api, state, handle, signal, originalPrompt)
+        if (!cleared) {
+          api.ui.toast({
+            variant: "warning",
+            title: TOAST_TITLE,
+            message: "Prompt changed before enhancement started.",
+          })
           return
         }
 
-        if (!isPromptHandleActive(api, state, handle)) {
-          api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while dialog was open." })
-          api.ui.dialog.clear()
-          return
+        stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
+        if (state.activeEnhancement) {
+          state.activeEnhancement.stopAnimation = stopAnimation
         }
 
-        state.enhancing = true
-        api.ui.dialog.clear()
+        const enhanced = await enhanceWithModel(api, options, input, enhancementController.signal)
+        if (signal.aborted) return
+        if (enhancementController.signal.aborted) {
+          throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
+        }
+
+        stopAnimation()
+
+        const wrote = await writePrompt(api, state, handle, enhanced, signal, originalPrompt)
+        if (!wrote) {
+          api.ui.toast({
+            variant: "warning",
+            title: TOAST_TITLE,
+            message: "Enhanced prompt is ready, but that prompt is no longer active.",
+          })
+          return
+        }
+        if (enhancementController.signal.aborted) {
+          throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
+        }
+
+        state.lastOriginal = originalPrompt
+        state.lastEnhancedInput = enhanced
+
         api.ui.toast({
-          variant: "info",
-          title: TOAST_TITLE,
-          message: "Enhancing prompt...",
+          variant: "success",
+          title: "Prompt enhanced",
+          message: "Enhanced prompt added to input.",
           duration: TOAST_DURATION_MS,
         })
+      } catch (error) {
+        if (signal.aborted) return
 
-        const enhancementController = new AbortController()
-        const onLifecycleAbort = () => enhancementController.abort(signal.reason)
-        state.activeEnhancement = {
-          controller: enhancementController,
-          handle,
-          originalPrompt,
-          input,
-        }
-        if (signal.aborted) {
-          enhancementController.abort(signal.reason)
-        } else {
-          signal.addEventListener("abort", onLifecycleAbort, { once: true })
+        stopAnimation()
+
+        const canceled = enhancementController.signal.aborted && !signal.aborted
+        if (canceled && state.activeEnhancement?.canceled) {
+          // cancelActiveEnhancement already stopped the animation and restored the prompt.
+          return
         }
 
-        void (async () => {
-          let stopAnimation = () => {}
+        let restored = true
+        if (originalPrompt) {
           try {
-            const cleared = await clearPrompt(api, state, handle, signal, originalPrompt)
-            if (!cleared) {
-              api.ui.toast({
-                variant: "warning",
-                title: TOAST_TITLE,
-                message: "Prompt changed before enhancement started.",
-              })
-              return
-            }
-
-            stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
-            if (state.activeEnhancement) {
-              state.activeEnhancement.stopAnimation = stopAnimation
-            }
-
-            const enhanced = await enhanceWithModel(api, options, input, enhancementController.signal)
-            if (signal.aborted) return
-            if (enhancementController.signal.aborted) {
-              throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
-            }
-
-            stopAnimation()
-
-            const wrote = await writePrompt(api, state, handle, enhanced, signal, originalPrompt)
-            if (!wrote) {
-              api.ui.toast({
-                variant: "warning",
-                title: TOAST_TITLE,
-                message: "Enhanced prompt is ready, but that prompt is no longer active.",
-              })
-              return
-            }
-            if (enhancementController.signal.aborted) {
-              throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
-            }
-
-            state.lastOriginal = originalPrompt
-            state.lastEnhancedInput = enhanced
-
-            api.ui.toast({
-              variant: "success",
-              title: "Prompt enhanced",
-              message: "Enhanced prompt added to input.",
-              duration: TOAST_DURATION_MS,
-            })
-          } catch (error) {
-            if (signal.aborted) return
-
-            stopAnimation()
-
-            const canceled = enhancementController.signal.aborted && !signal.aborted
-            if (canceled && state.activeEnhancement?.canceled) {
-              // cancelActiveEnhancement already stopped the animation and restored the prompt.
-              return
-            }
-
-            let restored = true
-            if (originalPrompt) {
-              try {
-                restored = await restorePrompt(api, state, handle, originalPrompt, signal)
-              } catch {
-                // Best-effort restore; do not suppress the error toast.
-                restored = false
-              }
-            } else {
-              try {
-                restored = await writePrompt(api, state, handle, input, signal)
-              } catch {
-                restored = false
-              }
-            }
-            const baseMessage = canceled
-              ? ENHANCEMENT_CANCELED_MESSAGE
-              : error instanceof Error
-                ? error.message
-                : "Prompt enhancement failed."
-            const message = restored
-              ? canceled
-                ? "Enhancement canceled. Original prompt restored."
-                : baseMessage
-              : `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
-            api.ui.toast({ variant: canceled && restored ? "info" : "error", title: TOAST_TITLE, message })
-          } finally {
-            stopAnimation()
-            signal.removeEventListener("abort", onLifecycleAbort)
-            if (state.activeEnhancement?.controller === enhancementController) {
-              state.activeEnhancement = undefined
-            }
-            state.enhancing = false
+            restored = await restorePrompt(api, state, handle, originalPrompt, signal)
+          } catch {
+            // Best-effort restore; do not suppress the error toast.
+            restored = false
           }
-        })()
-      }}
-    />
-  ))
+        } else {
+          try {
+            restored = await writePrompt(api, state, handle, input, signal)
+          } catch {
+            restored = false
+          }
+        }
+        const baseMessage = canceled
+          ? ENHANCEMENT_CANCELED_MESSAGE
+          : error instanceof Error
+            ? error.message
+            : "Prompt enhancement failed."
+        const message = restored
+          ? canceled
+            ? "Enhancement canceled. Original prompt restored."
+            : baseMessage
+          : `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
+        api.ui.toast({ variant: canceled && restored ? "info" : "error", title: TOAST_TITLE, message })
+      } finally {
+        stopAnimation()
+        signal.removeEventListener("abort", onLifecycleAbort)
+        if (state.activeEnhancement?.controller === enhancementController) {
+          state.activeEnhancement = undefined
+        }
+        state.enhancing = false
+      }
+    })()
+  }
+
+  setEnhanceDialog({ initialValue, onCancel: closeDialog, onConfirm: confirmInput })
 }
 
 function revertEnhancement(
@@ -665,9 +794,17 @@ function revertEnhancement(
 
 const tui: TuiPlugin = async (api, options) => {
   const state: PluginState = { enhancing: false }
+  const [enhanceDialog, setEnhanceDialog] = createSignal<EnhanceDialogState | undefined>()
 
   const promptSlots: TuiSlotPlugin = {
     slots: {
+      app() {
+        return (
+          <Show when={enhanceDialog()}>
+            {(dialog) => renderEnhanceDialog(api, dialog())}
+          </Show>
+        )
+      },
       home_prompt(_ctx, props) {
         return (
           <api.ui.Prompt
@@ -703,7 +840,7 @@ const tui: TuiPlugin = async (api, options) => {
       keybind: "ctrl+e",
       suggested: true,
       onSelect: () => {
-        openEnhanceDialog(api, options, state, api.lifecycle.signal)
+        openEnhanceDialog(api, options, state, setEnhanceDialog, api.lifecycle.signal)
       },
     },
     {
@@ -721,6 +858,7 @@ const tui: TuiPlugin = async (api, options) => {
   api.lifecycle.onDispose(() => {
     unregister()
     api.ui.dialog.clear()
+    setEnhanceDialog(undefined)
     state.activeEnhancement?.controller.abort(api.lifecycle.signal.reason)
     state.activeEnhancement = undefined
     state.enhancing = false
