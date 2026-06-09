@@ -30,7 +30,9 @@ Context use:
 
 Format:
 - Use one direct sentence unless a short numbered list makes distinct tasks clearer.
-- Return plain text only: no quotes, Markdown fences, labels, prefaces, explanations, or follow-up questions.
+- Return only the exact prompt text to place in the input: no prefaces, labels, explanations, or follow-up questions.
+- Do not wrap the whole output in quotes or code fences; preserve quotes and code blocks that belong to the draft.
+- A short numbered list is allowed when it makes distinct tasks clearer.
 
 Examples:
 

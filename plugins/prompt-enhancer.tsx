@@ -391,6 +391,7 @@ async function enhanceWithModel(
     {
       directory,
       title: `Prompt Enhancer ${Math.random().toString(36).slice(2, 8)}`,
+      permission: [{ permission: "*", action: "deny", pattern: "*" }],
     },
     { signal, throwOnError: true },
   )
@@ -426,9 +427,11 @@ async function enhanceWithModel(
     if (!enhanced) throw new Error("Enhancer returned no text.")
     return enhanced
   } finally {
-    void api.client.session.delete({ sessionID: tempSessionID, directory }).catch(() => {
-      // Best-effort cleanup for the temporary enhancement session.
-    })
+    void api.client.session
+      .abort({ sessionID: tempSessionID, directory })
+      .catch(() => {})
+      .then(() => api.client.session.delete({ sessionID: tempSessionID, directory }))
+      .catch(() => {})
   }
 }
 
@@ -676,16 +679,22 @@ function openEnhanceDialog(
             restored = false
           }
         }
-        const baseMessage = canceled
-          ? ENHANCEMENT_CANCELED_MESSAGE
-          : error instanceof Error
-            ? error.message
-            : "Prompt enhancement failed."
-        const message = restored
-          ? canceled
-            ? "Enhancement canceled. Original prompt restored."
-            : baseMessage
-          : `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
+        let baseMessage: string
+        if (canceled) {
+          baseMessage = ENHANCEMENT_CANCELED_MESSAGE
+        } else if (error instanceof Error) {
+          baseMessage = error.message
+        } else {
+          baseMessage = "Prompt enhancement failed."
+        }
+        let message: string
+        if (canceled && restored) {
+          message = "Enhancement canceled. Original prompt restored."
+        } else if (restored) {
+          message = baseMessage
+        } else {
+          message = `${baseMessage} Original prompt could not be restored because the prompt changed. Please re-enter your prompt manually.`
+        }
         api.ui.toast({ variant: canceled && restored ? "info" : "error", title: TOAST_TITLE, message })
       } finally {
         stopAnimation()
@@ -858,7 +867,12 @@ const tui: TuiPlugin = async (api, options) => {
     unregister()
     api.ui.dialog.clear()
     setEnhanceDialog(undefined)
-    state.activeEnhancement?.controller.abort(api.lifecycle.signal.reason)
+
+    const active = state.activeEnhancement
+    if (active) {
+      active.controller.abort(api.lifecycle.signal.reason)
+    }
+
     state.activeEnhancement = undefined
     state.enhancing = false
     state.promptRef = undefined
