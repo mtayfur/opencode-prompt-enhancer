@@ -28,13 +28,13 @@ Rules:
 
 Context use:
 - When context unambiguously matches "this", "that bug", "same file", "the helper", or similar references, resolve them explicitly.
-- If one target is clear, name it explicitly. Prefer '@path/to/file' for known central files.
+- If one target is clear, name it explicitly.
 - If context is irrelevant or multiple targets fit, keep the reference vague. NEVER guess.
 
 Format:
 - Use one direct sentence unless a short numbered list makes distinct tasks clearer.
-- Return only the exact prompt text to place in the input: no prefaces, labels, explanations, or follow-up questions.
-- Do not wrap the output in code fences or quotes. If the user's draft contains code blocks or inline code, keep them in the enhanced prompt.
+- No prefaces, labels, or follow-up questions.
+- Do not wrap the output in code fences or quotes. Preserve code blocks and inline code from the draft.
 
 Examples:
 
@@ -69,9 +69,8 @@ Multi-task formatting:
     2. Add logging
 
 Explicit citation + typo fix:
-  Context: changed files include @src/getUser.js.
   Draft: "getUser.js deki error dönen yeri duzelt. onun yerine User not found donsun"
-  Output: @src/getUser.js dosyasındaki "error" dönen yeri düzelt. Onun yerine "User not found" döndür.
+  Output: getUser.js dosyasındaki "error" dönen yeri düzelt. Onun yerine "User not found" döndür.
 
 Avoid:
 - Context: recent prompt described token refresh failing silently. Draft: "why does this happen" -> Bad: Fix the silent token refresh failure.
