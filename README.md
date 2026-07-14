@@ -7,6 +7,7 @@ OpenCode TUI plugin that rewrites rough prompt drafts into clearer, stronger pro
 - Rewrites rough prompt drafts into clearer, stronger prompts.
 - Uses lightweight workspace context.
 - Keeps the original intent and language, and does not read file contents.
+- Preserves a leading OpenCode slash command while enhancing only its instructions.
 - Supports canceling an active enhancement and reverting an unchanged enhanced prompt.
 
 ## Context used

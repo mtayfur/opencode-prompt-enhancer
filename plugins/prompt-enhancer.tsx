@@ -101,6 +101,25 @@ type EnhanceDialogState = {
 
 type SetEnhanceDialog = (dialog: EnhanceDialogState | undefined) => void
 
+type EnhancementInput = {
+  command?: string
+  draft: string
+}
+
+function parseEnhancementInput(input: string): EnhancementInput {
+  const match = input.trimEnd().match(/^(\/[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:-]*)*)(?:(?: +|\n)([\s\S]*))?$/)
+  if (!match) return { draft: input.trim() }
+
+  return {
+    command: match[1],
+    draft: match[2]?.trim() ?? "",
+  }
+}
+
+function formatEnhancedInput(input: EnhancementInput, enhancedDraft: string): string {
+  return input.command ? `${input.command} ${enhancedDraft}` : enhancedDraft
+}
+
 function parseModelString(value: string | undefined): ModelRef | undefined {
   if (!value) return undefined
   const trimmed = value.trim()
@@ -593,6 +612,13 @@ function openEnhanceDialog(
       return
     }
 
+    const enhancementInput = parseEnhancementInput(value)
+    if (!enhancementInput.draft) {
+      api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter instructions after the slash command." })
+      closeDialog()
+      return
+    }
+
     if (!isPromptHandleActive(api, state, handle)) {
       api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while dialog was open." })
       closeDialog()
@@ -641,7 +667,8 @@ function openEnhanceDialog(
           state.activeEnhancement.stopAnimation = stopAnimation
         }
 
-        const enhanced = await enhanceWithModel(api, options, input, enhancementController.signal)
+        const enhancedDraft = await enhanceWithModel(api, options, enhancementInput.draft, enhancementController.signal)
+        const enhanced = formatEnhancedInput(enhancementInput, enhancedDraft)
         if (signal.aborted) return
         if (enhancementController.signal.aborted) {
           throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)

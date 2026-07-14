@@ -44,6 +44,7 @@ Primary files:
 - When enhancing from the current prompt, snapshot the full `TuiPromptInfo`, clear the prompt immediately before the async model call, and restore the snapshot on failure.
 - Read the current prompt from `promptRef.current.input`.
 - Prefill the custom enhance dialog from the snapshotted prompt input.
+- If the prompt starts with an OpenCode slash command, enhance only the instructions after the command and prepend the unchanged command to the result.
 - Replace prompt text with `promptRef.set(...)` when available. Preserve `mode` and non-text `parts`, and drop only text parts unless the feature explicitly wants to remove attachments.
 - If no prompt ref is available, fall back to `api.client.tui.clearPrompt(...)` and `api.client.tui.appendPrompt(...)`.
 
@@ -69,3 +70,4 @@ Primary files:
   5. Confirm the main prompt now contains the enhanced text and the stale prompt was not submitted.
   6. Press `Ctrl+Shift+E` and confirm the original prompt is restored when the enhanced prompt is still unchanged.
   7. Start another enhancement, press `Ctrl+Shift+E` while it is running, and confirm the request is canceled and the original prompt is restored.
+  8. Enhance `/review inspect these files` and confirm the result starts with exactly one unchanged `/review ` prefix.
