@@ -11,7 +11,8 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_DIR="${HOME}/.config/opencode"
 TUI_CONFIG_FILE="${CONFIG_DIR}/tui.json"
 LEGACY_CONFIG_FILE="${CONFIG_DIR}/opencode.json"
-PLUGIN_PATH="${PROJECT_DIR}/index.ts"
+PLUGIN_PATH="${PROJECT_DIR}/dist/index.js"
+LEGACY_PLUGIN_PATH="${PROJECT_DIR}/index.ts"
 RELEASE_PLUGIN_ENTRY="@mtayfur/opencode-prompt-enhancer@latest"
 
 GREEN='\033[0;32m'
@@ -119,27 +120,39 @@ case "${1:-install}" in
 
     require_command bun
 
-    if [ ! -f "${PLUGIN_PATH}" ]; then
-      err "Plugin entry point not found: ${PLUGIN_PATH}"
-      exit 1
-    fi
-
-    PLUGIN_ENTRY="$(plugin_file_url "${PLUGIN_PATH}")"
-
     # 1. Install project dependencies without mutating lockfile.
-    echo -e "${YELLOW}[1/3] Installing project dependencies...${NC}"
+    echo -e "${YELLOW}[1/4] Installing project dependencies...${NC}"
     bun install --cwd "${PROJECT_DIR}" --frozen-lockfile
     info "Dependencies installed"
     echo ""
 
-    # 2. Ensure config directory exists
-    echo -e "${YELLOW}[2/3] Ensuring opencode config directory...${NC}"
+    # 2. Build plugin (compile TSX → JS for runtime compatibility)
+    echo -e "${YELLOW}[2/4] Building plugin...${NC}"
+    bun run --cwd "${PROJECT_DIR}" build
+    info "Build complete"
+    echo ""
+
+    if [ ! -f "${PLUGIN_PATH}" ]; then
+      err "Plugin entry point not found after build: ${PLUGIN_PATH}"
+      exit 1
+    fi
+
+    PLUGIN_ENTRY="$(plugin_file_url "${PLUGIN_PATH}")"
+    LEGACY_PLUGIN_ENTRY="$(plugin_file_url "${LEGACY_PLUGIN_PATH}")"
+
+    # 3. Ensure config directory exists
+    echo -e "${YELLOW}[3/4] Ensuring opencode config directory...${NC}"
     mkdir -p "${CONFIG_DIR}"
     info "Config directory ready: ${CONFIG_DIR}"
     echo ""
 
-    # 3. Register plugin in tui.json.
-    echo -e "${YELLOW}[3/3] Registering plugin in OpenCode TUI config...${NC}"
+    # 4. Register plugin in tui.json.
+    echo -e "${YELLOW}[4/4] Registering plugin in OpenCode TUI config...${NC}"
+    legacy_tui_result=$(json_set_plugin "${TUI_CONFIG_FILE}" "remove" "${LEGACY_PLUGIN_ENTRY}" "${RELEASE_PLUGIN_ENTRY}")
+    if [ "$legacy_tui_result" = "ok" ]; then
+      warn "Removed previous local source entry from ${TUI_CONFIG_FILE}"
+    fi
+
     result=$(json_set_plugin "${TUI_CONFIG_FILE}" "install" "${PLUGIN_ENTRY}" "${RELEASE_PLUGIN_ENTRY}")
     case "$result" in
       replaced-release) info "Replaced release plugin with local plugin in ${TUI_CONFIG_FILE}" ;;
@@ -151,7 +164,7 @@ case "${1:-install}" in
 
     # Clean up the old installer target from the previous implementation only for this plugin.
     if [ -f "${LEGACY_CONFIG_FILE}" ]; then
-      legacy_result=$(json_set_plugin "${LEGACY_CONFIG_FILE}" "remove" "${PLUGIN_PATH}" "${RELEASE_PLUGIN_ENTRY}")
+      legacy_result=$(json_set_plugin "${LEGACY_CONFIG_FILE}" "remove" "${LEGACY_PLUGIN_PATH}" "${RELEASE_PLUGIN_ENTRY}")
       if [ "$legacy_result" = "ok" ]; then
         warn "Removed previous local entry from ${LEGACY_CONFIG_FILE}"
       fi
@@ -172,6 +185,7 @@ case "${1:-install}" in
 
     require_command bun
     PLUGIN_ENTRY="$(plugin_file_url "${PLUGIN_PATH}")"
+    LEGACY_PLUGIN_ENTRY="$(plugin_file_url "${LEGACY_PLUGIN_PATH}")"
 
     if [ ! -f "${TUI_CONFIG_FILE}" ]; then
       warn "Config file not found, nothing to uninstall."
@@ -179,6 +193,11 @@ case "${1:-install}" in
     fi
 
     result=$(json_set_plugin "${TUI_CONFIG_FILE}" "uninstall" "${PLUGIN_ENTRY}" "${RELEASE_PLUGIN_ENTRY}")
+    if [ "$result" = "notfound" ]; then
+      result=$(json_set_plugin "${TUI_CONFIG_FILE}" "uninstall" "${LEGACY_PLUGIN_ENTRY}" "${RELEASE_PLUGIN_ENTRY}")
+    else
+      json_set_plugin "${TUI_CONFIG_FILE}" "remove" "${LEGACY_PLUGIN_ENTRY}" "${RELEASE_PLUGIN_ENTRY}" >/dev/null
+    fi
     case "$result" in
       release-exists) warn "Release plugin already registered in ${TUI_CONFIG_FILE}" ;;
       notfound)       warn "Plugin not found in ${TUI_CONFIG_FILE}" ;;
