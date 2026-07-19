@@ -15,7 +15,8 @@ import { ENHANCER_SYSTEM_PROMPT } from "./enhancer-system-prompt"
 
 const MAX_RECENT_MESSAGES = 3
 const MAX_CHANGED_FILES = 25
-const MAX_PROMPT_PREVIEW_LENGTH = 250
+const MAX_CONTEXT_ITEM_PREVIEW_LENGTH = 250
+const CONTEXT_TRUNCATION_MARKER = "\n[... truncated ...]\n"
 const ENHANCEMENT_TIMEOUT_MS = 60_000
 const ENHANCEMENT_ANIMATION_INTERVAL_MS = 250
 const TOAST_DURATION_MS = 3_000
@@ -141,6 +142,19 @@ function extractVisibleText(parts: ReadonlyArray<Part>): string {
     .map((part) => part.text)
     .join("")
     .trim()
+}
+
+function formatContextPreview(text: string): string {
+  if (text.length <= MAX_CONTEXT_ITEM_PREVIEW_LENGTH) return text
+
+  const available = MAX_CONTEXT_ITEM_PREVIEW_LENGTH - CONTEXT_TRUNCATION_MARKER.length
+  const headLength = Math.ceil(available / 2)
+  const tailLength = available - headLength
+  return `${text.slice(0, headLength)}${CONTEXT_TRUNCATION_MARKER}${text.slice(-tailLength)}`
+}
+
+function indentContextContinuation(text: string, indentation: string): string {
+  return text.replaceAll("\n", `\n${indentation}`)
 }
 
 function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): ModelRef | undefined {
@@ -371,14 +385,6 @@ function startEnhancementAnimation(
 function gatherContext(api: Api): string {
   const sections: string[] = []
 
-  const dir = api.state.path.directory
-  sections.push(`Working directory: ${dir}`)
-
-  const branch = api.state.vcs?.branch
-  if (branch) {
-    sections.push(`Current branch: ${branch}`)
-  }
-
   const route = api.route.current
   if (isSessionRoute(route)) {
     const sessionID = route.params.sessionID
@@ -391,20 +397,30 @@ function gatherContext(api: Api): string {
       for (const msg of recent) {
         const text = extractVisibleText(api.state.part(msg.id))
         if (text) {
-          prompts.push(text.length > MAX_PROMPT_PREVIEW_LENGTH ? `${text.slice(0, MAX_PROMPT_PREVIEW_LENGTH)}...` : text)
+          prompts.push(formatContextPreview(text))
         }
       }
       if (prompts.length > 0) {
-        sections.push(`Recent user prompts in this session (newest first):\n${prompts.map((p, i) => `${i + 1}. ${p}`).join("\n")}`)
+        const formatted = prompts.map((prompt, index) => `${index + 1}. ${indentContextContinuation(prompt, "   ")}`).join("\n")
+        sections.push(`Recent user prompts in this session (newest first; use only same-task items):\n${formatted}`)
       }
     }
 
     const diff = api.state.session.diff(sessionID)
     if (diff.length > 0) {
-      const files = diff.slice(0, MAX_CHANGED_FILES).map((f) => `  @${f.file}`)
-      sections.push(`Files changed in session:\n${files.join("\n")}`)
+      const visibleFiles = diff.slice(0, MAX_CHANGED_FILES)
+      const count = diff.length > visibleFiles.length ? `; showing ${visibleFiles.length} of ${diff.length}` : ""
+      const files = visibleFiles.map((file) => `  @${file.file}`)
+      sections.push(`Files changed in session (candidates only; not proof of task intent${count}):\n${files.join("\n")}`)
     }
   }
+
+  const metadata = [`Working directory: ${api.state.path.directory}`]
+  const branch = api.state.vcs?.branch
+  if (branch) {
+    metadata.push(`Current branch: ${branch}`)
+  }
+  sections.push(`Workspace metadata (weak signal only):\n${metadata.join("\n")}`)
 
   return sections.join("\n\n")
 }
