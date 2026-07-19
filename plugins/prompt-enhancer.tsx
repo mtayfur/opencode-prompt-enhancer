@@ -52,7 +52,8 @@ type ModelRef = {
 type Api = Parameters<TuiPlugin>[0]
 type ActiveEnhancement = {
   controller: AbortController
-  stopAnimation?: () => void
+  stopAnimation: () => void
+  clearPromise?: Promise<boolean>
   handle: PromptHandle
   originalPrompt?: TuiPromptInfo
   input: string
@@ -60,7 +61,6 @@ type ActiveEnhancement = {
 }
 
 type PluginState = {
-  enhancing: boolean
   activeEnhancement?: ActiveEnhancement
   promptRef?: TuiPromptRef
   promptTarget?: PromptTarget
@@ -108,17 +108,21 @@ type EnhancementInput = {
 }
 
 function parseEnhancementInput(input: string): EnhancementInput {
-  const match = input.trimEnd().match(/^(\/[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:-]*)*)(?:(?: +|\n)([\s\S]*))?$/)
-  if (!match) return { draft: input.trim() }
+  const match = input.match(/^(\/[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:-]*)*)(?:(?: +|\n)([\s\S]*))?$/)
+  if (!match) return { draft: input }
 
   return {
     command: match[1],
-    draft: match[2]?.trim() ?? "",
+    draft: match[2] ?? "",
   }
 }
 
 function formatEnhancedInput(input: EnhancementInput, enhancedDraft: string): string {
-  return input.command ? `${input.command} ${enhancedDraft}` : enhancedDraft
+  if (!input.command) return enhancedDraft
+
+  const nested = parseEnhancementInput(enhancedDraft)
+  const draft = nested.command === input.command ? nested.draft : enhancedDraft
+  return draft ? `${input.command} ${draft}` : input.command
 }
 
 function parseModelString(value: string | undefined): ModelRef | undefined {
@@ -141,7 +145,6 @@ function extractVisibleText(parts: ReadonlyArray<Part>): string {
     .filter((part): part is TextPart => part.type === "text" && !part.ignored)
     .map((part) => part.text)
     .join("")
-    .trim()
 }
 
 function formatContextPreview(text: string): string {
@@ -342,11 +345,15 @@ async function cancelActiveEnhancement(
   signal: AbortSignal,
 ): Promise<boolean> {
   const active = state.activeEnhancement
-  if (!state.enhancing || !active) return false
+  if (!active) return false
 
   active.canceled = true
-  active.stopAnimation?.()
+  active.stopAnimation()
   active.controller.abort(new Error(ENHANCEMENT_CANCELED_MESSAGE))
+
+  if (active.clearPromise) {
+    await active.clearPromise.catch(() => false)
+  }
 
   return restoreEnhancementPrompt(api, state, active, signal)
 }
@@ -395,7 +402,7 @@ function gatherContext(api: Api): string {
     if (recent.length > 0) {
       const prompts: string[] = []
       for (const msg of recent) {
-        const text = extractVisibleText(api.state.part(msg.id))
+        const text = extractVisibleText(api.state.part(msg.id)).trim()
         if (text) {
           prompts.push(formatContextPreview(text))
         }
@@ -476,7 +483,7 @@ async function enhanceWithModel(
     if (!parts) throw new Error("Enhancer returned no response.")
 
     const enhanced = extractVisibleText(parts)
-    if (!enhanced) throw new Error("Enhancer returned no text.")
+    if (!enhanced.trim()) throw new Error("Enhancer returned no text.")
     return enhanced
   } finally {
     void api.client.session
@@ -591,7 +598,7 @@ function openEnhanceDialog(
   setEnhanceDialog: SetEnhanceDialog,
   signal: AbortSignal,
 ): void {
-  if (state.enhancing) {
+  if (state.activeEnhancement) {
     api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enhancement in progress." })
     return
   }
@@ -619,29 +626,30 @@ function openEnhanceDialog(
   const closeDialog = () => setEnhanceDialog(undefined)
 
   const confirmInput = (value: string) => {
-    if (state.enhancing) return
+    if (state.activeEnhancement) return
 
-    const input = value.trim()
-    if (!input) {
+    if (!value.trim()) {
       api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter a prompt first." })
       closeDialog()
       return
     }
 
     const enhancementInput = parseEnhancementInput(value)
-    if (!enhancementInput.draft) {
+    if (!enhancementInput.draft.trim()) {
       api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Enter instructions after the slash command." })
       closeDialog()
       return
     }
 
-    if (!isPromptHandleActive(api, state, handle)) {
+    const promptChanged = originalPrompt && handle.ref
+      ? !samePromptInfo(handle.ref.current, originalPrompt)
+      : false
+    if (!isPromptHandleActive(api, state, handle) || promptChanged) {
       api.ui.toast({ variant: "warning", title: TOAST_TITLE, message: "Prompt changed while dialog was open." })
       closeDialog()
       return
     }
 
-    state.enhancing = true
     closeDialog()
     api.ui.toast({
       variant: "info",
@@ -654,9 +662,10 @@ function openEnhanceDialog(
     const onLifecycleAbort = () => enhancementController.abort(signal.reason)
     const activeEnhancement: ActiveEnhancement = {
       controller: enhancementController,
+      stopAnimation: () => {},
       handle,
       originalPrompt,
-      input,
+      input: value,
     }
     state.activeEnhancement = activeEnhancement
     if (signal.aborted) {
@@ -666,9 +675,10 @@ function openEnhanceDialog(
     }
 
     void (async () => {
-      let stopAnimation = () => {}
       try {
-        const cleared = await clearPrompt(api, state, handle, signal, originalPrompt)
+        const clearPromise = clearPrompt(api, state, handle, signal, originalPrompt)
+        activeEnhancement.clearPromise = clearPromise
+        const cleared = await clearPromise
         if (!cleared) {
           api.ui.toast({
             variant: "warning",
@@ -678,10 +688,7 @@ function openEnhanceDialog(
           return
         }
 
-        stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
-        if (state.activeEnhancement) {
-          state.activeEnhancement.stopAnimation = stopAnimation
-        }
+        activeEnhancement.stopAnimation = startEnhancementAnimation(api, state, handle, originalPrompt)
 
         const enhancedDraft = await enhanceWithModel(api, options, enhancementInput.draft, enhancementController.signal)
         const enhanced = formatEnhancedInput(enhancementInput, enhancedDraft)
@@ -690,7 +697,7 @@ function openEnhanceDialog(
           throw errorFromReason(enhancementController.signal.reason, ENHANCEMENT_CANCELED_MESSAGE)
         }
 
-        stopAnimation()
+        activeEnhancement.stopAnimation()
 
         const wrote = await writePrompt(api, state, handle, enhanced, signal, originalPrompt)
         if (!wrote) {
@@ -723,7 +730,7 @@ function openEnhanceDialog(
       } catch (error) {
         if (signal.aborted) return
 
-        stopAnimation()
+        activeEnhancement.stopAnimation()
 
         const canceled = enhancementController.signal.aborted && !signal.aborted
         if (canceled && state.activeEnhancement?.canceled) {
@@ -756,12 +763,11 @@ function openEnhanceDialog(
         }
         api.ui.toast({ variant: canceled && restored ? "info" : "error", title: TOAST_TITLE, message })
       } finally {
-        stopAnimation()
+        activeEnhancement.stopAnimation()
         signal.removeEventListener("abort", onLifecycleAbort)
         if (state.activeEnhancement?.controller === enhancementController) {
           state.activeEnhancement = undefined
         }
-        state.enhancing = false
       }
     })()
   }
@@ -774,7 +780,7 @@ function revertEnhancement(
   state: PluginState,
   signal: AbortSignal,
 ): void {
-  if (state.enhancing && state.activeEnhancement) {
+  if (state.activeEnhancement) {
     void (async () => {
       try {
         const restored = await cancelActiveEnhancement(api, state, signal)
@@ -866,7 +872,7 @@ function revertEnhancement(
 }
 
 const tui: TuiPlugin = async (api, options) => {
-  const state: PluginState = { enhancing: false }
+  const state: PluginState = {}
   const [enhanceDialog, setEnhanceDialog] = createSignal<EnhanceDialogState | undefined>()
 
   const promptSlots: TuiSlotPlugin = {
@@ -947,7 +953,6 @@ const tui: TuiPlugin = async (api, options) => {
     }
 
     state.activeEnhancement = undefined
-    state.enhancing = false
     state.promptRef = undefined
     state.promptTarget = undefined
     state.lastEnhancement = undefined
