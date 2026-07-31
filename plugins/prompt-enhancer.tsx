@@ -161,8 +161,17 @@ function indentContextContinuation(text: string, indentation: string): string {
 }
 
 function resolveEnhancerModel(api: Api, options: PluginOptions | undefined): ModelRef | undefined {
-  const override = typeof options?.model === "string" ? parseModelString(options.model) : undefined
-  if (override) return override
+  const modelOverride = typeof options?.model === "string" ? options.model : undefined
+  if (modelOverride?.trim()) {
+    const override = parseModelString(modelOverride)
+    if (override) return override
+
+    api.ui.toast({
+      variant: "warning",
+      title: TOAST_TITLE,
+      message: `Invalid model override ${JSON.stringify(modelOverride)}; expected "provider/model". Using default model.`,
+    })
+  }
 
   return parseModelString(api.state.config.small_model || api.state.config.model)
 }
@@ -442,8 +451,8 @@ async function enhanceWithModel(
   const model = resolveEnhancerModel(api, options)
   const context = gatherContext(api)
   const userMessage = [
-    `--- CONTEXT ---\n${context}\n---`,
-    `--- DRAFT ---\n${input}\n---`,
+    `<CONTEXT>\n${context}\n</CONTEXT>`,
+    `<DRAFT>\n${input}\n</DRAFT>`,
   ].join("\n\n")
 
   const created = await api.client.session.create(
@@ -949,6 +958,15 @@ const tui: TuiPlugin = async (api, options) => {
 
     const active = state.activeEnhancement
     if (active) {
+      active.stopAnimation()
+      if (active.originalPrompt && active.handle.ref) {
+        try {
+          active.handle.ref.set(clonePromptInfo(active.originalPrompt))
+          active.handle.ref.focus()
+        } catch {
+          // WHY: Teardown restoration is best-effort because the captured prompt ref may already be detached.
+        }
+      }
       active.controller.abort(api.lifecycle.signal.reason)
     }
 
