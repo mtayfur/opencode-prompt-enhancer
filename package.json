@@ -27,22 +27,19 @@
     "scripts"
   ],
   "engines": {
-    "opencode": ">=1.17.19"
+    "opencode": ">=1.18.12 <2"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.17.19",
-    "@opencode-ai/sdk": "^1.17.19",
-    "@opentui/core": "^0.4.3",
-    "@opentui/solid": "^0.4.3",
-    "solid-js": "^1.9.12"
+    "@opentui/solid": ">=0.4.5 <1",
+    "solid-js": ">=1.9.12 <2"
   },
   "devDependencies": {
     "@babel/core": "^7.28.0",
     "@babel/preset-typescript": "^7.27.1",
-    "@opencode-ai/plugin": "^1.17.19",
-    "@opencode-ai/sdk": "^1.17.19",
-    "@opentui/core": "^0.4.3",
-    "@opentui/solid": "^0.4.3",
+    "@opencode-ai/plugin": "^1.18.12",
+    "@opencode-ai/sdk": "^1.18.12",
+    "@opentui/core": "^0.4.5",
+    "@opentui/solid": "^0.4.5",
     "babel-preset-solid": "^1.9.12",
     "solid-js": "^1.9.12",
     "typescript": "^5.8.2"

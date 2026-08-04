@@ -45,7 +45,7 @@ For npm install/publish flows, add the package to OpenCode's `tui.json` plugin l
 }
 ```
 
-OpenCode `>=1.17.19` is required.
+OpenCode `>=1.18.12 <2` is required.
 
 Restart OpenCode after changing the plugin configuration.
 
